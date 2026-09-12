@@ -299,6 +299,21 @@ function renderLine(
   // model + thinking level
   const lvl = thinkLevel && thinkLevel !== "off" ? t.fg("dim", ` 🧠 ${thinkLevel}`) : "";
   parts.push(t.fg("accent", `🤖 ${shortenModel(ctx.model)}`) + lvl);
+  // ── LIVE quotas (right after model/thinking), identity-color bars (5h=yellow, 7d=green, bold; red when critical) ──
+  if (quota.chips.length > 0) {
+    const q = quota.chips.map((c) => {
+      const used = Math.max(0, Math.min(100, Math.round(100 - c.remainPct)));
+      const remain = Math.max(0, Math.min(100, Math.round(c.remainPct)));
+      const col = gaugeColor(c.label, used);
+      const reset = c.resetsAt ? t.fg("dim", ` ⏳ ${fmtReset(c.resetsAt)}`) : "";
+      return t.fg("dim", `${c.label} `) + t.bold(t.fg(col, `${used}%`)) + t.fg("dim", "[") + gaugeBar(t, c.label, used) + t.fg("dim", "]") + t.fg("dim", `${remain}%`) + reset;
+    }).join(t.fg("dim", " "));
+    const provTag = quota.provider === "anthropic" ? "Anthropic" : quota.provider === "openai-codex" ? "Codex" : "OpenCode Go";
+    parts.push(t.fg("accent", `⚡${provTag} `) + q);
+  } else if (quota.provider === "anthropic" || quota.provider === "openai-codex" || quota.provider === "opencode" || quota.provider === "opencode-go") {
+    // provider supported but no data yet — subtle placeholder, not noisy
+    parts.push(t.fg("dim", "⚡…"));
+  }
   // path
   try {
     const sp = shortenPath(ctx.cwd);
@@ -323,22 +338,6 @@ function renderLine(
   if (stats.cacheRead > 0) tok.push(`R${fmtTokens(stats.cacheRead)}`);
   if (stats.cacheWrite > 0) tok.push(`W${fmtTokens(stats.cacheWrite)}`);
   if (tok.length) parts.push(t.fg("dim", tok.join(" ")));
-
-  // ── LIVE quotas, identity-color bars (5h=yellow, 7d=green, bold; red when critical) ──
-  if (quota.chips.length > 0) {
-    const q = quota.chips.map((c) => {
-      const used = Math.max(0, Math.min(100, Math.round(100 - c.remainPct)));
-      const remain = Math.max(0, Math.min(100, Math.round(c.remainPct)));
-      const col = gaugeColor(c.label, used);
-      const reset = c.resetsAt ? t.fg("dim", ` ⏳ ${fmtReset(c.resetsAt)}`) : "";
-      return t.fg("dim", `${c.label} `) + t.bold(t.fg(col, `${used}%`)) + t.fg("dim", "[") + gaugeBar(t, c.label, used) + t.fg("dim", "]") + t.fg("dim", `${remain}%`) + reset;
-    }).join(t.fg("dim", " "));
-    const provTag = quota.provider === "anthropic" ? "Anthropic" : quota.provider === "openai-codex" ? "Codex" : "OpenCode Go";
-    parts.push(t.fg("accent", `⚡${provTag} `) + q);
-  } else if (quota.provider === "anthropic" || quota.provider === "openai-codex" || quota.provider === "opencode" || quota.provider === "opencode-go") {
-    // provider supported but no data yet — subtle placeholder, not noisy
-    parts.push(t.fg("dim", "⚡…"));
-  }
 
   const sep = t.fg("dim", " │ ");
   return truncateToWidth(parts.join(sep), width);
