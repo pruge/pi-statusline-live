@@ -37,7 +37,23 @@ type QuotaState = {
   provider?: string;
 };
 
-// ── tiny helpers ──
+// ── gauges: fixed identity colors (strong + distinct), red when critical ──
+// context → cyan (borderAccent), 5h → yellow (warning), 7d → green (success).
+// % numbers share the bar color; any gauge >= 90% flips to error (red).
+const GAUGE_CRIT = 90;
+type GaugeColor = "borderAccent" | "warning" | "success" | "error";
+function gaugeColor(label: string, used: number): GaugeColor {
+  if (used >= GAUGE_CRIT) return "error";
+  if (label === "5h") return "warning";
+  if (label === "7d") return "success";
+  return "borderAccent"; // context + fallback
+}
+function gaugeBar(t: any, label: string, usedPct: number): string {
+  const used = Math.max(0, Math.min(100, Math.round(usedPct)));
+  const col = gaugeColor(label, used);
+  const filled = Math.floor((used * 10) / 100);
+  return t.bold(t.fg(col, "▓".repeat(filled))) + t.fg("dim", "░".repeat(10 - filled));
+}
 function fmtTokens(n: number): string {
   if (n < 1000) return `${n}`;
   if (n < 10000) return `${(n / 1000).toFixed(1)}k`;
@@ -292,11 +308,10 @@ function renderLine(
     const g = getGit(ctx.cwd);
     if (g.branch) parts.push(t.fg("accent", g.branch) + " " + (g.dirty ? t.fg("error", "✗") : t.fg("success", "✓")));
   } catch { /* ignore */ }
-  // context
+  // context (cyan, bold; red when critical)
   if (ctxWin > 0 && ctxPct >= 0) {
-    const col = ctxPct > 80 ? "error" : ctxPct > 60 ? "warning" : "success";
-    const filled = Math.floor((Math.min(100, ctxPct) * 10) / 100);
-    parts.push(t.fg(col, `${ctxPct}%`) + t.fg("dim", `:${fmtTokens(ctxCur)}[${"▓".repeat(filled)}${"░".repeat(10 - filled)}]${fmtTokens(Math.max(0, ctxWin - ctxCur))}`));
+    const col = gaugeColor("ctx", ctxPct);
+    parts.push(t.bold(t.fg(col, `${ctxPct}%`)) + t.fg("dim", `:${fmtTokens(ctxCur)}[`) + gaugeBar(t, "ctx", ctxPct) + t.fg("dim", `]${fmtTokens(Math.max(0, ctxWin - ctxCur))}`));
   }
   // cost
   if (stats.cost > 0) parts.push(t.fg("dim", `$${stats.cost.toFixed(2)}`));
@@ -308,16 +323,14 @@ function renderLine(
   if (stats.cacheWrite > 0) tok.push(`W${fmtTokens(stats.cacheWrite)}`);
   if (tok.length) parts.push(t.fg("dim", tok.join(" ")));
 
-  // ── LIVE quotas, context-style bars (used%[bar]remain%) ──
+  // ── LIVE quotas, identity-color bars (5h=yellow, 7d=green, bold; red when critical) ──
   if (quota.chips.length > 0) {
     const q = quota.chips.map((c) => {
       const used = Math.max(0, Math.min(100, Math.round(100 - c.remainPct)));
       const remain = Math.max(0, Math.min(100, Math.round(c.remainPct)));
-      const col = used > 80 ? "error" : used > 60 ? "warning" : "success"; // same thresholds as context
-      const filled = Math.floor((used * 10) / 100);
-      const bar = t.fg(col, "▓".repeat(filled)) + t.fg("dim", "░".repeat(10 - filled));
+      const col = gaugeColor(c.label, used);
       const reset = c.resetsAt ? t.fg("dim", `↺${fmtReset(c.resetsAt)}`) : "";
-      return t.fg("dim", `${c.label} `) + t.fg(col, `${used}%`) + t.fg("dim", "[") + bar + t.fg("dim", "]") + t.fg("dim", `${remain}%`) + reset;
+      return t.fg("dim", `${c.label} `) + t.bold(t.fg(col, `${used}%`)) + t.fg("dim", "[") + gaugeBar(t, c.label, used) + t.fg("dim", "]") + t.fg("dim", `${remain}%`) + reset;
     }).join(t.fg("dim", " "));
     const provTag = quota.provider === "anthropic" ? "An" : quota.provider === "openai-codex" ? "Cx" : "Go";
     parts.push(t.fg("accent", `⚡${provTag} `) + q);
