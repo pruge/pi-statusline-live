@@ -330,7 +330,7 @@ function renderLine(
       const used = Math.max(0, Math.min(100, Math.round(100 - c.remainPct)));
       const remain = Math.max(0, Math.min(100, Math.round(c.remainPct)));
       const col = gaugeColor(c.label, used);
-      const reset = c.resetsAt ? t.fg("dim", `↺${fmtReset(c.resetsAt)}`) : "";
+      const reset = c.resetsAt ? t.fg("dim", ` ⏳ ${fmtReset(c.resetsAt)}`) : "";
       return t.fg("dim", `${c.label} `) + t.bold(t.fg(col, `${used}%`)) + t.fg("dim", "[") + gaugeBar(t, c.label, used) + t.fg("dim", "]") + t.fg("dim", `${remain}%`) + reset;
     }).join(t.fg("dim", " "));
     const provTag = quota.provider === "anthropic" ? "An" : quota.provider === "openai-codex" ? "Cx" : "Go";
@@ -490,7 +490,7 @@ export default function (pi: ExtensionAPI) {
         await update(true);
         const q = quota.chips.map((c) => {
           const used = Math.max(0, Math.min(100, Math.round(100 - c.remainPct)));
-          return `${c.label} ${used}% (↺${fmtReset(c.resetsAt)})`;
+          return `${c.label} ${used}% (⏳ ${fmtReset(c.resetsAt)})`;
         }).join(", ") || quota.error || "no data";
         ctx.ui.notify(`quotas [${quota.provider ?? "?"}]: ${q}`, "info");
         return;
