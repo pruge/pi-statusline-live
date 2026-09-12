@@ -296,8 +296,9 @@ function renderLine(
   } catch { /* ignore */ }
 
   const parts: string[] = [renderPhase(t, phase, toolName, thinkLevel, tick)];
-  // model
-  parts.push(t.fg("accent", `🤖 ${shortenModel(ctx.model)}`));
+  // model + thinking level
+  const lvl = thinkLevel && thinkLevel !== "off" ? t.fg("dim", ` 🧠 ${thinkLevel}`) : "";
+  parts.push(t.fg("accent", `🤖 ${shortenModel(ctx.model)}`) + lvl);
   // path
   try {
     const sp = shortenPath(ctx.cwd);
@@ -384,6 +385,7 @@ export default function (pi: ExtensionAPI) {
         dispose: () => { try { (unsub as any)?.(); } catch { /* ignore */ } },
         invalidate() {},
         render(width: number): string[] {
+          syncThinkLevel(ctx);
           return [renderLine(ctx, width, quota, phase, toolName, thinkLevel, tick)];
         },
       };
