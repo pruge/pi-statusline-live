@@ -312,7 +312,7 @@ function renderLine(
   // context (cyan, bold; red when critical)
   if (ctxWin > 0 && ctxPct >= 0) {
     const col = gaugeColor("ctx", ctxPct);
-    parts.push(t.bold(t.fg(col, `${ctxPct}%`)) + t.fg("dim", `:${fmtTokens(ctxCur)}[`) + gaugeBar(t, "ctx", ctxPct) + t.fg("dim", `]${fmtTokens(Math.max(0, ctxWin - ctxCur))}`));
+    parts.push(t.bold(t.fg(col, `${ctxPct}%`)) + t.fg("dim", ` ${fmtTokens(ctxCur)}tok [`) + gaugeBar(t, "ctx", ctxPct) + t.fg("dim", `] ${fmtTokens(Math.max(0, ctxWin - ctxCur))} left`));
   }
   // cost
   if (stats.cost > 0) parts.push(t.fg("dim", `$${stats.cost.toFixed(2)}`));
@@ -333,7 +333,7 @@ function renderLine(
       const reset = c.resetsAt ? t.fg("dim", ` ⏳ ${fmtReset(c.resetsAt)}`) : "";
       return t.fg("dim", `${c.label} `) + t.bold(t.fg(col, `${used}%`)) + t.fg("dim", "[") + gaugeBar(t, c.label, used) + t.fg("dim", "]") + t.fg("dim", `${remain}%`) + reset;
     }).join(t.fg("dim", " "));
-    const provTag = quota.provider === "anthropic" ? "An" : quota.provider === "openai-codex" ? "Cx" : "Go";
+    const provTag = quota.provider === "anthropic" ? "Anthropic" : quota.provider === "openai-codex" ? "Codex" : "OpenCode Go";
     parts.push(t.fg("accent", `⚡${provTag} `) + q);
   } else if (quota.provider === "anthropic" || quota.provider === "openai-codex" || quota.provider === "opencode" || quota.provider === "opencode-go") {
     // provider supported but no data yet — subtle placeholder, not noisy
