@@ -14,7 +14,7 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth } from "@earendil-works/pi-tui";
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -327,9 +327,7 @@ function renderLine(
   }
 
   const sep = t.fg("dim", " │ ");
-  const line = `${t.fg("dim", "─")} ${parts.join(sep)} `;
-  const fill = Math.max(0, width - visibleWidth(line));
-  return truncateToWidth(line + "─".repeat(fill), width);
+  return truncateToWidth(parts.join(sep), width);
 }
 
 // ── extension ──

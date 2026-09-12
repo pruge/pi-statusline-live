@@ -8,7 +8,7 @@ Realtime pi statusline — one package mixing two ideas:
 Since 0.2.0 the line lives in the **native footer slot** (`ctx.ui.setFooter`) — pi's built-in `cwd │ tokens` footer is replaced, not duplicated. `/live-status off` restores the native footer.
 
 ```
-─ ⠋ think:high │ 🤖 opus-4-8 │ …/ai2/pi │ main ✓ │ 12%:8k[▓░░░░░░░░░]190k │ $0.42 │ ↑12k ↓8k │ ⚡An 5h:78%↺2h 7d:91%↺3d
+⠋ think:high │ 🤖 opus-4-8 │ …/ai2/pi │ main ✓ │ 12%:8k[▓░░░░░░░░░]190k │ $0.42 │ ↑12k ↓8k │ ⚡An 5h:78%↺2h 7d:91%↺3d
 ```
 
 ## Install
