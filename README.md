@@ -2,11 +2,13 @@
 
 Realtime pi statusline — one package mixing two ideas:
 
-- **Base UI** from [`@wierdbytes/pi-statusline`](https://github.com/wierdbytes/pi-wierd-stuff): one-line widget above the editor with `model │ path │ git │ context │ cost │ tokens`
+- **Base UI** from [`@wierdbytes/pi-statusline`](https://github.com/wierdbytes/pi-wierd-stuff): one-line widget with `phase │ model │ path │ git │ context │ cost │ tokens`
 - **Live quotas** from [`@latentminds/pi-quotas`](https://github.com/latentminds-ai/pi-quotas): realtime `5h / 7d` (Anthropic, Codex) and `5h / weekly` (OpenCode Go), refreshed every 60s + on every turn
 
+Since 0.2.0 the line lives in the **native footer slot** (`ctx.ui.setFooter`) — pi's built-in `cwd │ tokens` footer is replaced, not duplicated. `/live-status off` restores the native footer.
+
 ```
-─ 🤖 opus-4-8 │ …/ai2/pi │ main ✓ │ 12%:8k[▓░░░░░░░░░]190k │ $0.42 │ ↑12k ↓8k │ ⚡An 5h:78%↺2h 7d:91%↺3d
+─ ⠋ think:high │ 🤖 opus-4-8 │ …/ai2/pi │ main ✓ │ 12%:8k[▓░░░░░░░░░]190k │ $0.42 │ ↑12k ↓8k │ ⚡An 5h:78%↺2h 7d:91%↺3d
 ```
 
 ## Install
@@ -27,6 +29,7 @@ pi -e github.com/pruge/pi-statusline-live
 
 | Block | Source |
 |---|---|
+| `○ idle / ⠋ think[:level] / ⠋ run / ⠋ <tool>` | live agent phase (`agent_start` → run, `thinking_*` stream events → think, `tool_execution_*` → tool, `agent_settled` → idle; spinner ticks at 120ms while busy) |
 | `🤖 model` | active pi model (shortened) |
 | `path` | last 3 segments of cwd |
 | `git` | branch + `✓/✗` dirty |
@@ -44,7 +47,7 @@ Colors shift green → yellow → red as quota drops below 25% / 10%.
 ```
 /live-status          — show on/off state
 /live-status refresh  — force quota refetch now
-/live-status on|off   — toggle widget
+/live-status on|off   — toggle custom footer (off = native footer back)
 ```
 
 ## Credentials

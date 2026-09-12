@@ -2,11 +2,15 @@
  * pi-statusline-live
  *
  * Mix of:
- *  - @wierdbytes/pi-statusline (base UI: model / path / git / context / cost / tokens, one-line widget above editor)
+ *  - @wierdbytes/pi-statusline (base UI: model / path / git / context / cost / tokens)
  *  - @latentminds/pi-quotas (realtime quota fetch: Anthropic 5h/7d, Codex 5h/7d, OpenCode Go 5h/weekly)
  *
- * Realtime: widget refreshes every 60s + on turn_end / model_select / session_start.
- * No dependency on either package — standalone, zero-deps extension.
+ * 0.2.0: the line moved into the native footer slot via ctx.ui.setFooter()
+ * (replaces pi's built-in `cwd │ tokens` footer). Above-editor widget removed.
+ * A live phase chip leads the line: idle / think / run / tool.
+ *
+ * Realtime: footer repaints on phase events + quota refresh (60s + turn_end /
+ * model_select / session_start). No dependency on either package — standalone.
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -17,12 +21,14 @@ import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 
 // ── config ──
-const WIDGET_ID = "live-statusline";
 const REFRESH_MS = 60_000;
 const FETCH_TIMEOUT_MS = 15_000;
 const GIT_CACHE_MS = 5_000;
+const SPIN_MS = 120;
+const SPIN_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 // ── types ──
+type Phase = "idle" | "think" | "run" | "tool";
 type QuotaChip = { label: string; remainPct: number; resetsAt: number; limited?: boolean };
 type QuotaState = {
   at: number;
@@ -247,18 +253,33 @@ async function refreshQuotas(ctx: ExtensionContext, force = false): Promise<Quot
   return state;
 }
 
-// ── render ──
-function renderLine(ctx: ExtensionContext, width: number, quota: QuotaState): string {
+// ── phase chip ──
+function renderPhase(t: any, phase: Phase, toolName: string, thinkLevel: string, tick: number): string {
+  if (phase === "idle") return t.fg("dim", "○ idle");
+  const frame = SPIN_FRAMES[tick % SPIN_FRAMES.length];
+  if (phase === "think") {
+    const lvl = thinkLevel && thinkLevel !== "off" ? `:${thinkLevel}` : "";
+    return t.fg("warning", `${frame} think${lvl}`);
+  }
+  if (phase === "tool") return t.fg("accent", `${frame} ${toolName || "tool"}`);
+  return t.fg("accent", `${frame} run`);
+}
+
+// ── render (footer line) ──
+function renderLine(
+  ctx: ExtensionContext, width: number, quota: QuotaState,
+  phase: Phase, toolName: string, thinkLevel: string, tick: number,
+): string {
   const t = ctx.ui.theme;
   const stats = gatherStats(ctx);
   let ctxPct = -1, ctxCur = 0, ctxWin = 0;
   try {
     const u = ctx.getContextUsage();
-    if (u) { ctxWin = u.contextWindow ?? ctx.model?.contextWindow ?? 0; ctxCur = u.tokens; ctxPct = ctxWin > 0 ? Math.floor((ctxCur * 100) / ctxWin) : -1; }
+    if (u) { ctxWin = u.contextWindow ?? ctx.model?.contextWindow ?? 0; ctxCur = u.tokens ?? 0; ctxPct = ctxWin > 0 ? Math.floor((ctxCur * 100) / ctxWin) : -1; }
     else { ctxWin = ctx.model?.contextWindow ?? 0; }
   } catch { /* ignore */ }
 
-  const parts: string[] = [];
+  const parts: string[] = [renderPhase(t, phase, toolName, thinkLevel, tick)];
   // model
   parts.push(t.fg("accent", `🤖 ${shortenModel(ctx.model)}`));
   // path
@@ -306,58 +327,114 @@ function renderLine(ctx: ExtensionContext, width: number, quota: QuotaState): st
   }
 
   const sep = t.fg("dim", " │ ");
-  return truncateToWidth(`${t.fg("dim", "─")} ${parts.join(sep)} `, width);
+  const line = `${t.fg("dim", "─")} ${parts.join(sep)} `;
+  const fill = Math.max(0, width - visibleWidth(line));
+  return truncateToWidth(line + "─".repeat(fill), width);
 }
 
 // ── extension ──
 export default function (pi: ExtensionAPI) {
   let currentCtx: ExtensionContext | undefined;
   let timer: ReturnType<typeof setInterval> | undefined;
+  let spinTimer: ReturnType<typeof setInterval> | undefined;
   let quota: QuotaState = { at: 0, chips: [] };
   let tuiRef: { requestRender(): void } | undefined;
-  let enabled = true;
+  let footerOn = true;
   let inFlight = false;
+  // live phase
+  let phase: Phase = "idle";
+  let toolName = "";
+  let thinkLevel = "";
+  let tick = 0;
+
+  function repaint() {
+    try { tuiRef?.requestRender(); } catch { /* ignore */ }
+  }
+  function setPhase(p: Phase, tool = "") {
+    phase = p;
+    if (p === "tool") toolName = tool;
+    if (p === "idle") toolName = "";
+    repaint();
+  }
+  function syncThinkLevel(ctx: ExtensionContext) {
+    try {
+      const lvl = (ctx as any).thinkingLevel ?? (pi as any).getThinkingLevel?.();
+      if (typeof lvl === "string") thinkLevel = lvl;
+    } catch { /* ignore */ }
+  }
+
+  function installFooter(ctx: ExtensionContext) {
+    currentCtx = ctx;
+    syncThinkLevel(ctx);
+    ctx.ui.setFooter((tui: any, _theme: any, footerData: any) => {
+      tuiRef = tui as unknown as { requestRender(): void };
+      const unsub = footerData?.onBranchChange?.(() => repaint());
+      return {
+        dispose: () => { try { (unsub as any)?.(); } catch { /* ignore */ } },
+        invalidate() {},
+        render(width: number): string[] {
+          return [renderLine(ctx, width, quota, phase, toolName, thinkLevel, tick)];
+        },
+      };
+    });
+  }
+  function removeFooter(ctx?: ExtensionContext) {
+    try { (ctx ?? currentCtx)?.ui.setFooter(undefined); } catch { /* ignore */ }
+    tuiRef = undefined;
+  }
 
   async function update(force = false) {
-    if (!currentCtx || !enabled || inFlight) return;
+    if (!currentCtx || !footerOn || inFlight) return;
     inFlight = true;
     try {
       quota = await refreshQuotas(currentCtx, force);
-      tuiRef?.requestRender();
-      // widget needs explicit re-set to repaint in some pi versions
-      if (currentCtx) paint(currentCtx);
+      repaint();
     } finally { inFlight = false; }
   }
 
-  function paint(ctx: ExtensionContext) {
-    if (!enabled) return;
-    ctx.ui.setWidget(WIDGET_ID, (tui: any) => {
-      tuiRef = tui as unknown as { requestRender(): void };
-      return {
-        dispose() {},
-        invalidate() {},
-        render(width: number): string[] {
-          const line = renderLine(ctx, width, quota);
-          const fill = Math.max(0, width - visibleWidth(line));
-          return [line + "─".repeat(fill)];
-        },
-      };
-    }, { placement: "aboveEditor" });
+  function startTimers() {
+    if (!timer) {
+      timer = setInterval(() => void update(false), REFRESH_MS);
+      (timer as any)?.unref?.();
+    }
+    if (!spinTimer) {
+      spinTimer = setInterval(() => {
+        if (phase !== "idle") { tick++; repaint(); }
+      }, SPIN_MS);
+      (spinTimer as any)?.unref?.();
+    }
   }
-
-  function startTimer() {
+  function stopTimers() {
     if (timer) clearInterval(timer);
-    timer = setInterval(() => void update(false), REFRESH_MS);
-    (timer as any)?.unref?.();
+    timer = undefined;
+    if (spinTimer) clearInterval(spinTimer);
+    spinTimer = undefined;
   }
 
   pi.on("session_start", async (_e, ctx) => {
-    currentCtx = ctx;
-    if (!enabled) return;
-    paint(ctx);
-    startTimer();
+    if (!footerOn) { currentCtx = ctx; return; }
+    installFooter(ctx);
+    startTimers();
     void update(true);
   });
+
+  // ── phase tracking ──
+  pi.on("agent_start", async (_e, _ctx) => setPhase("run"));
+  pi.on("turn_start", async (_e, _ctx) => { if (phase === "idle") setPhase("run"); });
+  pi.on("message_update", async (e: any, _ctx) => {
+    const t = e?.assistantMessageEvent?.type;
+    if (t === "thinking_start" || t === "thinking_delta") { if (phase !== "tool") setPhase("think"); }
+    else if (t === "thinking_end") { if (phase === "think") setPhase("run"); }
+    else if (t === "text_start" || t === "text_delta") { if (phase === "idle" || phase === "think") setPhase("run"); }
+  });
+  pi.on("tool_execution_start", async (e: any, _ctx) => setPhase("tool", String(e?.toolName ?? "")));
+  pi.on("tool_execution_end", async (_e, _ctx) => { if (phase === "tool") setPhase("run"); });
+  pi.on("thinking_level_select", async (e: any, ctx) => {
+    if (typeof e?.level === "string") thinkLevel = e.level;
+    else syncThinkLevel(ctx);
+    repaint();
+  });
+  pi.on("agent_settled", async (_e, _ctx) => setPhase("idle"));
 
   pi.on("turn_end", async (_e, ctx) => {
     currentCtx = ctx;
@@ -366,32 +443,31 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("model_select", async (_e, ctx) => {
     currentCtx = ctx;
+    syncThinkLevel(ctx);
     void update(true);
   });
 
   pi.on("session_shutdown", async () => {
-    if (timer) clearInterval(timer);
-    timer = undefined;
-    try { currentCtx?.ui.setWidget(WIDGET_ID, undefined); } catch { /* ignore */ }
+    stopTimers();
+    setPhase("idle");
     currentCtx = undefined;
   });
 
   pi.registerCommand("live-status", {
-    description: "Toggle / refresh realtime statusline (model/path/git/context + live quotas)",
+    description: "Toggle / refresh live footer (phase + model/path/git/context + live quotas)",
     handler: async (args, ctx) => {
       const a = (args ?? "").trim();
       if (a === "off") {
-        enabled = false;
-        ctx.ui.setWidget(WIDGET_ID, undefined);
-        if (timer) clearInterval(timer);
-        ctx.ui.notify("live-statusline off", "info");
+        footerOn = false;
+        removeFooter(ctx);
+        stopTimers();
+        ctx.ui.notify("live-statusline off (native footer restored)", "info");
         return;
       }
       if (a === "on") {
-        enabled = true;
-        currentCtx = ctx;
-        paint(ctx);
-        startTimer();
+        footerOn = true;
+        installFooter(ctx);
+        startTimers();
         void update(true);
         ctx.ui.notify("live-statusline on — refreshing quotas…", "info");
         return;
@@ -406,7 +482,7 @@ export default function (pi: ExtensionAPI) {
         ctx.ui.notify(`quotas [${quota.provider ?? "?"}]: ${q}`, "info");
         return;
       }
-      ctx.ui.notify(`live-statusline ${enabled ? "on" : "off"} — usage: /live-status [on|off|refresh]`, "info");
+      ctx.ui.notify(`live-statusline ${footerOn ? "on" : "off"} — usage: /live-status [on|off|refresh]`, "info");
     },
   });
 }
