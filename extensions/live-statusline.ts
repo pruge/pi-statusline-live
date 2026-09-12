@@ -344,7 +344,20 @@ function renderLine(
 }
 
 // ── extension ──
+// Singleton guard: this package can be loaded twice — once as a global package
+// (settings.json → packages) and once project-local when running pi inside this
+// repo (package.json → pi.extensions). Both instances would fight over the
+// native footer slot and duplicate timers, so only the first load registers.
+const GUARD_KEY = "__piStatuslineLiveLoaded";
+
 export default function (pi: ExtensionAPI) {
+  const g = globalThis as any;
+  if (g[GUARD_KEY]) {
+    // Already loaded from another source — stay inert (no footer, no timers).
+    return;
+  }
+  g[GUARD_KEY] = true;
+
   let currentCtx: ExtensionContext | undefined;
   let timer: ReturnType<typeof setInterval> | undefined;
   let spinTimer: ReturnType<typeof setInterval> | undefined;
