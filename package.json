@@ -1,0 +1,41 @@
+{
+  "name": "pi-statusline-live",
+  "version": "0.1.0",
+  "description": "Realtime pi statusline: wierdbytes-style footer (model/path/git/context/cost/tokens) + live Anthropic 5h/7d, Codex 5h/7d, OpenCode Go quotas",
+  "type": "module",
+  "license": "MIT",
+  "author": "pruge",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi",
+    "statusline",
+    "quotas"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/pruge/pi-statusline-live"
+  },
+  "files": [
+    "extensions",
+    "README.md",
+    "LICENSE"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/live-statusline.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    },
+    "@earendil-works/pi-tui": {
+      "optional": true
+    }
+  }
+}
