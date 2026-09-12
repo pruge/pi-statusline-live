@@ -287,12 +287,16 @@ function renderLine(ctx: ExtensionContext, width: number, quota: QuotaState): st
   if (stats.cacheWrite > 0) tok.push(`W${fmtTokens(stats.cacheWrite)}`);
   if (tok.length) parts.push(t.fg("dim", tok.join(" ")));
 
-  // ── LIVE quotas (the mix part) ──
+  // ── LIVE quotas, context-style bars (used%[bar]remain%) ──
   if (quota.chips.length > 0) {
     const q = quota.chips.map((c) => {
-      const col = c.remainPct < 10 ? "error" : c.remainPct < 25 ? "warning" : "success";
+      const used = Math.max(0, Math.min(100, Math.round(100 - c.remainPct)));
+      const remain = Math.max(0, Math.min(100, Math.round(c.remainPct)));
+      const col = used > 80 ? "error" : used > 60 ? "warning" : "success"; // same thresholds as context
+      const filled = Math.floor((used * 10) / 100);
+      const bar = t.fg(col, "▓".repeat(filled)) + t.fg("dim", "░".repeat(10 - filled));
       const reset = c.resetsAt ? t.fg("dim", `↺${fmtReset(c.resetsAt)}`) : "";
-      return t.fg("dim", `${c.label}:`) + t.fg(col, `${Math.round(c.remainPct)}%`) + reset;
+      return t.fg("dim", `${c.label} `) + t.fg(col, `${used}%`) + t.fg("dim", "[") + bar + t.fg("dim", "]") + t.fg("dim", `${remain}%`) + reset;
     }).join(t.fg("dim", " "));
     const provTag = quota.provider === "anthropic" ? "An" : quota.provider === "openai-codex" ? "Cx" : "Go";
     parts.push(t.fg("accent", `⚡${provTag} `) + q);
@@ -395,7 +399,10 @@ export default function (pi: ExtensionAPI) {
       if (a === "refresh" || a === "r") {
         currentCtx = ctx;
         await update(true);
-        const q = quota.chips.map((c) => `${c.label} ${Math.round(c.remainPct)}% (↺${fmtReset(c.resetsAt)})`).join(", ") || quota.error || "no data";
+        const q = quota.chips.map((c) => {
+          const used = Math.max(0, Math.min(100, Math.round(100 - c.remainPct)));
+          return `${c.label} ${used}% (↺${fmtReset(c.resetsAt)})`;
+        }).join(", ") || quota.error || "no data";
         ctx.ui.notify(`quotas [${quota.provider ?? "?"}]: ${q}`, "info");
         return;
       }
