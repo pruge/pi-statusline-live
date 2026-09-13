@@ -65,6 +65,54 @@ function shortenPath(cwd: string): string {
   if (s.length <= 3) return cwd;
   return `…/${s[s.length - 3]}/${s[s.length - 2]}/${s[s.length - 1]}`;
 }
+function providerLabel(p?: string): string {
+  if (!p) return "?";
+  const known: Record<string, string> = {
+    anthropic: "Anthropic",
+    "openai-codex": "Codex",
+    openai: "OpenAI",
+    opencode: "OpenCode Zen",
+    "opencode-go": "OpenCode Go",
+    google: "Gemini",
+    xai: "xAI",
+    deepseek: "DeepSeek",
+    mistral: "Mistral",
+    groq: "Groq",
+    cerebras: "Cerebras",
+    nvidia: "NVIDIA",
+    openrouter: "OpenRouter",
+    "github-copilot": "Copilot",
+    github_copilot: "Copilot",
+    copilot: "Copilot",
+    "amazon-bedrock": "Bedrock",
+    "azure-openai-responses": "Azure",
+    "cloudflare-ai-gateway": "CF Gateway",
+    "cloudflare-workers-ai": "CF Workers",
+    "vercel-ai-gateway": "Vercel",
+    fireworks: "Fireworks",
+    together: "Together",
+    baseten: "Baseten",
+    huggingface: "HF",
+    zai: "ZAI",
+    "zai-coding-cn": "ZAI CN",
+    kimi: "Kimi",
+    "kimi-coding": "Kimi",
+    minimax: "MiniMax",
+    "minimax-cn": "MiniMax CN",
+    "qwen-token-plan": "Qwen",
+    "qwen-token-plan-individual": "Qwen",
+    "qwen-token-plan-cn": "Qwen CN",
+    xiaomi: "MiMo",
+    "xiaomi-token-plan-cn": "MiMo CN",
+    "xiaomi-token-plan-ams": "MiMo AMS",
+    "xiaomi-token-plan-sgp": "MiMo SGP",
+    "ant-ling": "Ant Ling",
+    radius: "Radius",
+    ollama: "Ollama",
+  };
+  if (known[p]) return known[p];
+  return p.split(/[-_]/).map((s) => (s ? s[0].toUpperCase() + s.slice(1) : s)).join(" ");
+}
 function shortenModel(m: { id?: string; name?: string } | undefined): string {
   let n = m?.name || m?.id || "no-model";
   if (n.startsWith("Claude ")) n = n.slice(7);
@@ -299,7 +347,10 @@ function renderLine(
   // model + thinking level
   const lvl = thinkLevel && thinkLevel !== "off" ? t.fg("dim", ` 🧠 ${thinkLevel}`) : "";
   parts.push(t.fg("accent", `🤖 ${shortenModel(ctx.model)}`) + lvl);
-  // ── LIVE quotas (right after model/thinking), identity-color bars (5h=yellow, 7d=green, bold; red when critical) ──
+  // ── LIVE quotas (right after model/thinking) + always-visible provider tag ──
+  // Quota bars only exist for Anthropic / Codex / OpenCode Go, but the ⚡provider
+  // chip renders for every provider so the active provider is always visible.
+  const activeProvider = quota.provider ?? (() => { try { return ctx.model?.provider; } catch { return undefined; } })();
   if (quota.chips.length > 0) {
     const q = quota.chips.map((c) => {
       const used = Math.max(0, Math.min(100, Math.round(100 - c.remainPct)));
@@ -308,11 +359,9 @@ function renderLine(
       const reset = c.resetsAt ? t.fg("dim", ` ⏳ ${fmtReset(c.resetsAt)}`) : "";
       return t.fg("dim", `${c.label} `) + t.bold(t.fg(col, `${used}%`)) + t.fg("dim", "[") + gaugeBar(t, c.label, used) + t.fg("dim", "]") + t.fg("dim", `${remain}%`) + reset;
     }).join(t.fg("dim", " "));
-    const provTag = quota.provider === "anthropic" ? "Anthropic" : quota.provider === "openai-codex" ? "Codex" : "OpenCode Go";
-    parts.push(t.fg("accent", `⚡${provTag} `) + q);
-  } else if (quota.provider === "anthropic" || quota.provider === "openai-codex" || quota.provider === "opencode" || quota.provider === "opencode-go") {
-    // provider supported but no data yet — subtle placeholder, not noisy
-    parts.push(t.fg("dim", "⚡…"));
+    parts.push(t.fg("accent", `⚡${providerLabel(activeProvider)} `) + q);
+  } else if (activeProvider) {
+    parts.push(t.fg("accent", `⚡${providerLabel(activeProvider)}`));
   }
   // path
   try {
@@ -349,6 +398,7 @@ function renderLine(
 // repo (package.json → pi.extensions). Both instances would fight over the
 // native footer slot and duplicate timers, so only the first load registers.
 const GUARD_KEY = "__piStatuslineLiveLoaded";
+const FOOTER_ON_KEY = "__piStatuslineLiveFooterOn";
 
 export default function (pi: ExtensionAPI) {
   const g = globalThis as any;
@@ -356,14 +406,19 @@ export default function (pi: ExtensionAPI) {
     // Already loaded from another source — stay inert (no footer, no timers).
     return;
   }
-  g[GUARD_KEY] = true;
+  // Owner token: cleared on session_shutdown so /reload (which tears down the
+  // old runtime before re-importing extensions) can acquire the slot again.
+  // Inert duplicates never set the key, so they never clear it.
+  const instanceId = `${Date.now()}-${Math.random()}`;
+  g[GUARD_KEY] = instanceId;
 
   let currentCtx: ExtensionContext | undefined;
   let timer: ReturnType<typeof setInterval> | undefined;
   let spinTimer: ReturnType<typeof setInterval> | undefined;
   let quota: QuotaState = { at: 0, chips: [] };
   let tuiRef: { requestRender(): void } | undefined;
-  let footerOn = true;
+  let footerOn = g[FOOTER_ON_KEY] ?? true;
+  function setFooterOn(v: boolean) { footerOn = v; g[FOOTER_ON_KEY] = v; }
   let inFlight = false;
   // live phase
   let phase: Phase = "idle";
@@ -476,6 +531,9 @@ export default function (pi: ExtensionAPI) {
     stopTimers();
     setPhase("idle");
     currentCtx = undefined;
+    // Release singleton so the reloaded extension can take over the footer.
+    // Only the owner clears — inert duplicates have no shutdown handler.
+    try { if (g[GUARD_KEY] === instanceId) delete g[GUARD_KEY]; } catch { /* ignore */ }
   });
 
   pi.registerCommand("live-status", {
@@ -483,14 +541,14 @@ export default function (pi: ExtensionAPI) {
     handler: async (args, ctx) => {
       const a = (args ?? "").trim();
       if (a === "off") {
-        footerOn = false;
+        setFooterOn(false);
         removeFooter(ctx);
         stopTimers();
         ctx.ui.notify("live-statusline off (native footer restored)", "info");
         return;
       }
       if (a === "on") {
-        footerOn = true;
+        setFooterOn(true);
         installFooter(ctx);
         startTimers();
         void update(true);
