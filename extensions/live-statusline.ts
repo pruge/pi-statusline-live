@@ -13,6 +13,7 @@
  * model_select / session_start). No dependency on either package — standalone.
  */
 
+import { cacheLabel, cacheRatio, cacheTone } from "../src/cache-segment.ts";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import { execFileSync } from "node:child_process";
@@ -387,6 +388,13 @@ function renderLine(
   if (stats.cacheRead > 0) tok.push(`R${fmtTokens(stats.cacheRead)}`);
   if (stats.cacheWrite > 0) tok.push(`W${fmtTokens(stats.cacheWrite)}`);
   if (tok.length) parts.push(t.fg("dim", tok.join(" ")));
+
+  // 캐시 히트율 — 색은 판정이다(85↑ success / 60↑ warning / 그 아래 error = 규칙 위반을 의심하라).
+  const cl = cacheLabel(stats);
+  if (cl) {
+    const tone = cacheTone(cacheRatio(stats));
+    parts.push(t.fg(tone === "good" ? "success" : tone === "warn" ? "warning" : tone === "bad" ? "error" : "dim", cl));
+  }
 
   const sep = t.fg("dim", " │ ");
   return truncateToWidth(parts.join(sep), width);

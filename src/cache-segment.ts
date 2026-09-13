@@ -1,0 +1,39 @@
+/**
+ * 캐시 히트율 한 조각 — statusline 의 `↑ ↓ R W` 옆에 붙인다.
+ *
+ * 순수 함수로 따로 둔다: 이 값은 "내 앞부분이 재사용되고 있는가"를 매 턴 봐야 하는 지표인데,
+ * 확장 파일 전체를 import 하지 않고 검사할 수 있어야 한다(회귀를 위해).
+ *
+ *  히트율 = cacheRead / (cacheRead + cacheWrite + input)
+ *   · input 은 맨돈(캐시 밖) 입력, cacheWrite 는 이번 턴에 새로 쓴 것 — 둘 다 벌금이다(1.25×/2×).
+ *   · claude-agent-sdk·anthropic 은 첫 메시지까지 경계에 포함 → 워커 브리핑을 헤드/테일로 가르는 이유.
+ *   · provider 에 따라 auto cache 는 write 를 0으로 보고하기도 한다(bai 실측) → 분모가 이상하면 null.
+ */
+export interface CacheStats {
+	input: number;
+	cacheRead: number;
+	cacheWrite: number;
+}
+export type Tone = "good" | "warn" | "bad" | "dim";
+
+export function cacheRatio(s: CacheStats): number | null {
+	const den = (s.cacheRead ?? 0) + (s.cacheWrite ?? 0) + (s.input ?? 0);
+	if (den <= 0) return null;
+	return s.cacheRead / den;
+}
+
+/** 색은 판정이다: 85% 이상 초록, 60% 이상 노랑, 그 아래는 빨강(= 규칙 위반을 의심하라). */
+export function cacheTone(r: number | null): Tone {
+	if (r == null) return "dim";
+	if (r >= 0.85) return "good";
+	if (r >= 0.6) return "warn";
+	return "bad";
+}
+
+/** 라벨: "cache 89%" · 쓰기 우세면 "cache 12%(W↑)" — write 가 read 보다 크면 색만으론 안 보인다. */
+export function cacheLabel(s: CacheStats): string | null {
+	const r = cacheRatio(s);
+	if (r == null || s.cacheRead + s.cacheWrite === 0) return null;
+	const pct = Math.round(r * 100);
+	return `cache ${pct}%` + (s.cacheWrite > s.cacheRead ? "(W↑)" : "");
+}
