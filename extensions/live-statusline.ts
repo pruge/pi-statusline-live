@@ -13,7 +13,7 @@
  * model_select / session_start). No dependency on either package — standalone.
  */
 
-import { cacheRatio, cacheReadSuffix, cacheTone, colorForTone } from "../src/cache-segment.ts";
+import { cacheRatio, cacheReadSuffix, cacheTone, colorForTone, cacheEmphasis } from "../src/cache-segment.ts";
 import { detectColorMode, downgradeAnsi } from "../src/ansi.ts";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
@@ -404,12 +404,14 @@ function renderLine(
   // 85%↑ success · 60%↑ warning · 아래 error = 브리핑·도구블록·TTL 규칙 중 하나를 어기고 있다.
   const rTone = cacheTone(cacheRatio(stats));
   const rw = cacheReadSuffix(stats, rTone);
-  // 테마에 그 이름이 없으면 무색으로 뜨므로 물어본다. 색이 없으면 bold 로 격상(판정은 남긴다).
-  const rColor = colorForTone(t, rTone);
+  // good 에 색을 쓰지 않는다. 실측 원인: dark 테마의 success 는 #b5bd68(khaki), text 는 #d4d4d4 —
+  // 상대밝기차 0.121 라 칠해도 "조금 진한 회색"으로 보인다(같은 줄의 accent·borderAccent 가 보였던 것은 채도 차이).
+  // 그래서 판정을 "색이 붙었는가" 자체로 만든다: quiet = dim, loud(warn/bad) = 진한 색 + bold.
+  const rColor = cacheEmphasis(rTone) === "loud" ? colorForTone(t, rTone) : null;
   const seg: string[] = [];
   if (tok.length) seg.push(t.fg("dim", tok.join(" ")));
   const rTxt = `R${fmtTokens(stats.cacheRead || 0)}${rw}`;
-  if (rw) seg.push(rColor ? t.fg(rColor, rTxt) : t.bold(rTxt));
+  if (rw) seg.push(rColor ? t.bold(t.fg(rColor, rTxt)) : t.fg("dim", rTxt));
   if (stats.cacheWrite > 0) seg.push(t.fg("dim", `W${fmtTokens(stats.cacheWrite)}`));
   if (seg.length) parts.push(seg.join(" "));
 
