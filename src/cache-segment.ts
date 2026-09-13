@@ -76,3 +76,14 @@ export function colorForTone(t: ThemeLike, tone: Tone): string | null {
 	const want = tone === "good" ? ["success", "green", "accent"] : tone === "warn" ? ["warning", "yellow", "accent"] : tone === "bad" ? ["error", "red"] : [];
 	return pickColor(t, want);
 }
+
+/**
+ * 강조 여부 — **정상(quiet)에는 색을 쓰지 않는다.**
+ * 실측(dark 테마): success #b5bd68 vs text #d4d4d4 → 상대밝기차 0.121. 칠해도 "조금 진한 회색"이다
+ * (채도가 낮은 khaki 라 그렇다). 한 줄에 색이 여러 개면 색은 정보가 아니라 장식이 된다.
+ * 그래서 good 은 dim(조용히), warn/bad 만 진한 색 + bold — **색이 보이면 문제가 있는 것**.
+ */
+export type Emphasis = "quiet" | "loud";
+export function cacheEmphasis(tone: Tone): Emphasis {
+	return tone === "warn" || tone === "bad" ? "loud" : "quiet";
+}

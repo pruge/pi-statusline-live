@@ -1,7 +1,7 @@
 // 캐시 조각의 회귀 — 이 값들이 푸터에 뜨는 문자열이다.
 // 숫자는 지어낸 게 아니라 실세션에서 가져왔다(cache-report 로 뽑은 것들).
 import assert from "node:assert/strict";
-const { cacheRatio, cacheTone, cacheLabel, cacheReadSuffix, pickColor, colorForTone } = await import("./cache-segment.ts");
+const { cacheRatio, cacheTone, cacheLabel, cacheReadSuffix, pickColor, colorForTone, cacheEmphasis } = await import("./cache-segment.ts");
 
 // 이 오케스트레이터 세션: ↑32.0M ↓665k R254.9M
 assert.equal(cacheReadSuffix({ input: 32_000_000, cacheRead: 254_900_000, cacheWrite: 0 }), "·89%");
@@ -46,4 +46,9 @@ assert.equal(detectColorMode({ COLORTERM: "truecolor", TERM: "xterm" }), "trueco
 assert.equal(detectColorMode({ TERM: "screen-256color" }), "256");
 assert.equal(detectColorMode({ TERM: "vt100" }), "16");
 assert.equal(detectColorMode({}), "none");
+// 정상에 색을 쓰지 않는다(색 = 문제 신호가 하나여야 한다)
+assert.equal(cacheEmphasis("good"), "quiet");
+assert.equal(cacheEmphasis("dim"), "quiet");
+assert.equal(cacheEmphasis("warn"), "loud");
+assert.equal(cacheEmphasis("bad"), "loud");
 console.log("  ✓ ansi 강등 11 케이스 (herdr/tmux 에서 truecolor 가 삼켜지는 경우 대비)");
