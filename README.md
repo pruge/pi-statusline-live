@@ -17,10 +17,10 @@ Survives `/reload` (singleton released on `session_shutdown`, footer reinstalled
 
 Thinking level (`🧠 high`) shows next to the model when active; hidden when `off` (non-reasoning models). Busy phase also carries it (`⠋ think:high`).
 
-No-quota provider (e.g. OpenAI, Gemini, Ollama, custom proxies):
+No-quota provider (e.g. OpenAI, Gemini, Ollama, custom proxies) — `🧠` chip works the same here (shown when level isn't `off`):
 
 ```
-○ idle │ 🤖 gpt-5.1 │ ⚡OpenAI │ …/ai2/pi │ main ✓ │ 12% 8k[▓░░░░░░░░░] 190k left
+○ idle │ 🤖 gpt-5.1 🧠 medium │ ⚡OpenAI │ …/ai2/pi │ main ✓ │ 12% 8k[▓░░░░░░░░░] 190k left
 ```
 
 ## Install
