@@ -4,12 +4,12 @@ import assert from "node:assert/strict";
 const { cacheRatio, cacheTone, cacheLabel, cacheReadSuffix, pickColor, colorForTone, cacheEmphasis, cachePaint, CACHE_LITERAL, GOOD_OPTIONS } = await import("./cache-segment.ts");
 
 // 이 오케스트레이터 세션: ↑32.0M ↓665k R254.9M
-assert.equal(cacheReadSuffix({ input: 32_000_000, cacheRead: 254_900_000, cacheWrite: 0 }), "·89%");
+assert.equal(cacheReadSuffix({ input: 32_000_000, cacheRead: 254_900_000, cacheWrite: 0 }), " 89%");
 assert.equal(cacheTone(cacheRatio({ input: 32_000_000, cacheRead: 254_900_000, cacheWrite: 0 })), "good");
 // 브리핑 규약 없던 워크트리 워커: read 97.2k / write 182.4k / in 63k → 28%, 쓰기가 이긴다
-assert.equal(cacheReadSuffix({ input: 63_000, cacheRead: 97_200, cacheWrite: 182_400 }), "·28%!!(W↑)", "bad 는 색 없이도 판정이 읽힌다");
-assert.equal(cacheReadSuffix({ input: 40_000_000, cacheRead: 40_000_000, cacheWrite: 0 }), "·50%!!");
-assert.equal(cacheReadSuffix({ input: 12_000_000, cacheRead: 40_000_000, cacheWrite: 0 }), "·77%!");
+assert.equal(cacheReadSuffix({ input: 63_000, cacheRead: 97_200, cacheWrite: 182_400 }), " 28%!!(W↑)", "bad 는 색 없이도 판정이 읽힌다");
+assert.equal(cacheReadSuffix({ input: 40_000_000, cacheRead: 40_000_000, cacheWrite: 0 }), " 50%!!");
+assert.equal(cacheReadSuffix({ input: 12_000_000, cacheRead: 40_000_000, cacheWrite: 0 }), " 77%!");
 assert.equal(cacheLabel({ input: 63_000, cacheRead: 97_200, cacheWrite: 182_400 }), "cache 28%(W↑)");
 assert.equal(cacheTone(cacheRatio({ input: 63_000, cacheRead: 97_200, cacheWrite: 182_400 })), "bad");
 // 전부 재사용(히스토리가 그대로 캐시된 뒤 같은 문장 재발송)
@@ -31,7 +31,7 @@ assert.equal(colorForTone(colored, "bad"), "error");
 assert.equal(colorForTone(colorless, "good"), null, "테마가 무색이면 null — 부르는 쪽이 bold 로 대체한다");
 const partial = { fg: (n, s) => (n === "accent" ? `\u001b[36m${s}\u001b[0m` : s) };
 assert.equal(colorForTone(partial, "good"), "accent", "success 가 없으면 같은 판정의 다른 색으로 갈아탄다");
-console.log("  ✓ cache-segment 16 케이스 — 예: R254.9M·89% / R97.2k·28%(W↑)");
+console.log("  ✓ cache-segment 16 케이스 — 예: R254.9M 89% / R97.2k 28%!!(W↑)");
 // ANSI 강등 — truecolor 를 삼키는 터미널에서도 판정이 살아야 한다
 const { detectColorMode, downgradeAnsi } = await import("./ansi.ts");
 const dark = { success: "\u001b[38;2;181;189;104m", warning: "\u001b[38;2;255;255;0m", error: "\u001b[38;2;204;102;102m", dim: "\u001b[38;2;102;102;102m" };
