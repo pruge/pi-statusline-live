@@ -54,3 +54,16 @@ export function downgradeAnsi(s: string, mode: ColorMode): string {
 		return mode === "256" ? `\x1b[38;5;${rgbTo256(R, G, B)}m` : `\x1b[${rgbTo16(R, G, B)}m`;
 	});
 }
+
+/**
+ * 주제를 타지 않는 16색 — 캐시 판정 전용.
+ * 이유(실측): dark 테마의 success 는 #b5bd68(khaki) 이고 text(#d4d4d4) 와 상대밝기차가 0.121 —
+ * 칠해도 "조금 진한 회색"으로 보였다. 반면 32/33/31 은 터미널 자체 팔레트로 매핑되므로
+ * 어떤 주제에서도 초록/노랑/빨강 계열로 남는다. 판정 색은 주제 취향보다 일관성이 먼저다.
+ */
+export const LITERAL = { good: 32, warn: 33, bad: 31 } as const;
+export type LiteralKey = keyof typeof LITERAL;
+
+export function paintLiteral(code: number, text: string, bold = false): string {
+	return `\u001b[${bold ? "1;" : ""}${code}m${text}\u001b[0m`;
+}

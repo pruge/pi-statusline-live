@@ -87,3 +87,20 @@ export type Emphasis = "quiet" | "loud";
 export function cacheEmphasis(tone: Tone): Emphasis {
 	return tone === "warn" || tone === "bad" ? "loud" : "quiet";
 }
+
+/** 캐시 조각을 어떻게 칠 것인가 — good 도 색을 받는다(사용자 취향: 정상=초록). */
+export type CachePaint = { kind: "literal"; code: number; bold: boolean } | { kind: "theme"; name: string; bold: boolean } | { kind: "none" };
+export const CACHE_LITERAL = { good: 32, warn: 33, bad: 31 };
+
+/**
+ * mode = "literal"(기본) → 16색 리터럴. 어떤 터미널에서도 계열이 보존된다.
+ * mode = "theme" → 주제의 success/warning/error 를 쓴다(주제 팔레트를 신뢰할 때만).
+ * bad 만 bold — 빨강+굵기가 "지금 당장 보라"는 유일한 강조여야 한다.
+ */
+export function cachePaint(tone: Tone, mode: "literal" | "theme" = "literal", themeRole?: string | null): CachePaint {
+	if (tone === "dim") return { kind: "none" };
+	const bold = tone === "bad";
+	if (mode === "theme" && themeRole) return { kind: "theme", name: themeRole, bold };
+	const code = tone === "good" ? CACHE_LITERAL.good : tone === "warn" ? CACHE_LITERAL.warn : CACHE_LITERAL.bad;
+	return { kind: "literal", code, bold };
+}

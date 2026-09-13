@@ -13,8 +13,8 @@
  * model_select / session_start). No dependency on either package — standalone.
  */
 
-import { cacheRatio, cacheReadSuffix, cacheTone, colorForTone, cacheEmphasis } from "../src/cache-segment.ts";
-import { detectColorMode, downgradeAnsi } from "../src/ansi.ts";
+import { cacheRatio, cacheReadSuffix, cacheTone, cachePaint, colorForTone } from "../src/cache-segment.ts";
+import { detectColorMode, downgradeAnsi, paintLiteral } from "../src/ansi.ts";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import { execFileSync } from "node:child_process";
@@ -404,14 +404,18 @@ function renderLine(
   // 85%↑ success · 60%↑ warning · 아래 error = 브리핑·도구블록·TTL 규칙 중 하나를 어기고 있다.
   const rTone = cacheTone(cacheRatio(stats));
   const rw = cacheReadSuffix(stats, rTone);
-  // good 에 색을 쓰지 않는다. 실측 원인: dark 테마의 success 는 #b5bd68(khaki), text 는 #d4d4d4 —
-  // 상대밝기차 0.121 라 칠해도 "조금 진한 회색"으로 보인다(같은 줄의 accent·borderAccent 가 보였던 것은 채도 차이).
-  // 그래서 판정을 "색이 붙었는가" 자체로 만든다: quiet = dim, loud(warn/bad) = 진한 색 + bold.
-  const rColor = cacheEmphasis(rTone) === "loud" ? colorForTone(t, rTone) : null;
+  // 색 배치(주제 무관 16색, bad 만 bold): 85%↑ 초록 · 60%↑ 노랑+! · 아래 빨강+!!(+W↑)
+  // 테마 경유가 필요하면 /live-status cache theme — dark 의 success(#b5bd68) 는 text 와 구별이 안 된다.
+  const cacheMode = ((globalThis as any)[CACHE_COLOR_MODE_KEY] ?? "literal") === "theme" ? "theme" : "literal";
+  const paint = cachePaint(rTone, cacheMode, cacheMode === "theme" ? colorForTone(t, rTone) : undefined);
   const seg: string[] = [];
   if (tok.length) seg.push(t.fg("dim", tok.join(" ")));
   const rTxt = `R${fmtTokens(stats.cacheRead || 0)}${rw}`;
-  if (rw) seg.push(rColor ? t.bold(t.fg(rColor, rTxt)) : t.fg("dim", rTxt));
+  if (rw) {
+    if (paint.kind === "literal") seg.push(paintLiteral(paint.code, rTxt, paint.bold));
+    else if (paint.kind === "theme") seg.push(paint.bold ? t.bold(t.fg(paint.name, rTxt)) : t.fg(paint.name, rTxt));
+    else seg.push(t.fg("dim", rTxt));
+  }
   if (stats.cacheWrite > 0) seg.push(t.fg("dim", `W${fmtTokens(stats.cacheWrite)}`));
   if (seg.length) parts.push(seg.join(" "));
 
@@ -429,6 +433,7 @@ function renderLine(
 const GUARD_KEY = "__piStatuslineLiveLoaded";
 const FOOTER_ON_KEY = "__piStatuslineLiveFooterOn";
 const COLOR_MODE_KEY = "__piStatuslineColorMode";
+const CACHE_COLOR_MODE_KEY = "__piStatuslineCacheColors";
 
 export default function (pi: ExtensionAPI) {
   const g = globalThis as any;
