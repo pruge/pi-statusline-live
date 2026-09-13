@@ -37,5 +37,8 @@
     "@earendil-works/pi-tui": {
       "optional": true
     }
+  },
+  "scripts": {
+    "check": "npx --yes esbuild extensions/*.ts --outdir=/tmp/pi-statusline-check --log-level=warning"
   }
 }
