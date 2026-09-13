@@ -2,7 +2,7 @@
 
 Realtime pi statusline — one package mixing two ideas:
 
-- **Base UI** from [`@wierdbytes/pi-statusline`](https://github.com/wierdbytes/pi-wierd-stuff): one-line widget with `phase │ model │ provider │ path │ git │ context │ cost │ tokens`
+- **Base UI** from [`@wierdbytes/pi-statusline`](https://github.com/wierdbytes/pi-wierd-stuff): one-line widget with `phase │ model[thinking] │ provider │ path │ git │ context │ cost │ tokens`
 - **Live quotas** from [`@latentminds/pi-quotas`](https://github.com/latentminds-ai/pi-quotas): realtime `5h / 7d` (Anthropic, Codex) and `5h / weekly` (OpenCode Go), refreshed every 60s + on every turn. The `⚡provider` chip is always visible — quota bars only appear where a quota endpoint exists.
 
 Since 0.2.0 the line lives in the **native footer slot** (`ctx.ui.setFooter`) — pi's built-in `cwd │ tokens` footer is replaced, not duplicated. `/live-status off` restores the native footer.
@@ -12,8 +12,10 @@ Gauges: fixed identity colors, all bold — context = cyan, `5h` = yellow, `7d` 
 Survives `/reload` (singleton released on `session_shutdown`, footer reinstalled on `session_start`). `on/off` state persists across reloads.
 
 ```
-⠋ think:high │ 🤖 opus-4-8 │ ⚡Anthropic 5h 78%[▓▓▓▓▓▓▓░░░] ⏳2h 7d 91%[▓▓▓▓▓▓▓▓▓░] ⏳3d │ …/ai2/pi │ main ✓ │ 12% 8k[▓░░░░░░░░░] 190k left │ $0.42 │ ↑12k ↓8k
+⠋ think:high │ 🤖 opus-4-8 🧠 high │ ⚡Anthropic 5h 78%[▓▓▓▓▓▓▓░░░] ⏳2h 7d 91%[▓▓▓▓▓▓▓▓▓░] ⏳3d │ …/ai2/pi │ main ✓ │ 12% 8k[▓░░░░░░░░░] 190k left │ $0.42 │ ↑12k ↓8k
 ```
+
+Thinking level (`🧠 high`) shows next to the model when active; hidden when `off` (non-reasoning models). Busy phase also carries it (`⠋ think:high`).
 
 No-quota provider (e.g. OpenAI, Gemini, Ollama, custom proxies):
 
@@ -40,7 +42,7 @@ pi -e github.com/pruge/pi-statusline-live
 | Block | Source |
 |---|---|
 | `○ idle / ⠋ think[:level] / ⠋ run / ⠋ <tool>` | live agent phase (`agent_start` → run, `thinking_*` stream events → think, `tool_execution_*` → tool, `agent_settled` → idle; spinner ticks at 120ms while busy) |
-| `🤖 model` | active pi model (shortened) |
+| `🤖 model[ 🧠 level]` | active pi model (shortened) + thinking level (`off` → hidden) |
 | `⚡provider` | active provider, always shown (`⚡OpenAI`, `⚡Gemini`, `⚡Ollama`, custom `my-proxy` → `⚡My Proxy`); quota bars appended below when available |
 | `path` | last 3 segments of cwd |
 | `git` | branch + `✓/✗` dirty |
