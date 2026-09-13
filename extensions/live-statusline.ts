@@ -410,11 +410,13 @@ function renderLine(
   const paint = cachePaint(rTone, cacheMode, cacheMode === "theme" ? colorForTone(t, rTone) : undefined, (globalThis as any)[CACHE_GOOD_CODE_KEY]);
   const seg: string[] = [];
   if (tok.length) seg.push(t.fg("dim", tok.join(" ")));
-  const rTxt = `R${fmtTokens(stats.cacheRead || 0)}${rw}`;
+  // 색은 **비율에만** 입힌다. `R272.2M` 은 크기일 뿐(매 턴 커지는 수)이라 그것까지 칠리면
+  // 줄 전체가 시안/노랑/빨강로 시끄러워져 판정이 한 조각에서 읽히지 않는다.
+  const rQuiet = `R${fmtTokens(stats.cacheRead || 0)}`;
   if (rw) {
-    if (paint.kind === "literal") seg.push(paintLiteral(paint.code, rTxt, paint.bold));
-    else if (paint.kind === "theme") seg.push(paint.bold ? t.bold(t.fg(paint.name, rTxt)) : t.fg(paint.name, rTxt));
-    else seg.push(t.fg("dim", rTxt));
+    // 한 조각으로 push 한다: seg 는 " " 로 join 되므로 따로 넣으면 "R272.2M ·89%" 가 된다.
+    const hot = paint.kind === "literal" ? paintLiteral(paint.code, rw, paint.bold) : paint.kind === "theme" ? (paint.bold ? t.bold(t.fg(paint.name, rw)) : t.fg(paint.name, rw)) : t.fg("dim", rw);
+    seg.push(t.fg("dim", rQuiet) + hot);
   }
   if (stats.cacheWrite > 0) seg.push(t.fg("dim", `W${fmtTokens(stats.cacheWrite)}`));
   if (seg.length) parts.push(seg.join(" "));
