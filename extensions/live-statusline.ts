@@ -14,6 +14,7 @@
  */
 
 import { cacheRatio, cacheReadSuffix, cacheTone, colorForTone } from "../src/cache-segment.ts";
+import { detectColorMode, downgradeAnsi } from "../src/ansi.ts";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import { execFileSync } from "node:child_process";
@@ -62,6 +63,13 @@ function fmtTokens(n: number): string {
   return `${(n / 1000000).toFixed(1)}M`;
 }
 /** 창 크기는 "1.0M" 보다 "1M" 로 읽힌다(같은 숫자를 두 번 보지 않게). */
+/** 색 강등 모드: /live-status color <m> 또는 PI_STATUSLINE_COLOR 가 감지보다 앞선다. */
+export function resolveColorMode(): string {
+	const g = globalThis as any;
+	const forced = g[COLOR_MODE_KEY] ?? process.env.PI_STATUSLINE_COLOR;
+	if (forced === "truecolor" || forced === "256" || forced === "16" || forced === "none") return forced;
+	return detectColorMode(process.env);
+}
 function fmtWin(n: number): string {
   return fmtTokens(n).replace(/\.0(M|k)$/, "$1");
 }
@@ -394,8 +402,8 @@ function renderLine(
   if (stats.output > 0) tok.push(`↓${fmtTokens(stats.output)}`);
   // 캐시 히트율은 R 에 접미어로(별도 조각은 좁은 판에서 잘린다). 색이 판정이다:
   // 85%↑ success · 60%↑ warning · 아래 error = 브리핑·도구블록·TTL 규칙 중 하나를 어기고 있다.
-  const rw = cacheReadSuffix(stats);
   const rTone = cacheTone(cacheRatio(stats));
+  const rw = cacheReadSuffix(stats, rTone);
   // 테마에 그 이름이 없으면 무색으로 뜨므로 물어본다. 색이 없으면 bold 로 격상(판정은 남긴다).
   const rColor = colorForTone(t, rTone);
   const seg: string[] = [];
@@ -406,7 +414,9 @@ function renderLine(
   if (seg.length) parts.push(seg.join(" "));
 
   const sep = t.fg("dim", " │ ");
-  return truncateToWidth(parts.join(sep), width);
+  // 테마가 truecolor 로 내는 색을 터미널/중간 계층(herdr·tmux·구 TERM)이 삼키면
+  // 전부 "일반 텍스트 색"으로 뜬다. 그 경우엔 256/16 으로 강등해 보낸다(판정이 색에만 실리면 안 된다).
+  return downgradeAnsi(truncateToWidth(parts.join(sep), width), resolveColorMode());
 }
 
 // ── extension ──
@@ -416,6 +426,7 @@ function renderLine(
 // native footer slot and duplicate timers, so only the first load registers.
 const GUARD_KEY = "__piStatuslineLiveLoaded";
 const FOOTER_ON_KEY = "__piStatuslineLiveFooterOn";
+const COLOR_MODE_KEY = "__piStatuslineColorMode";
 
 export default function (pi: ExtensionAPI) {
   const g = globalThis as any;
@@ -573,7 +584,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerCommand("live-status", {
-    description: "Toggle / refresh live footer (phase + model/path/git/context + live quotas)",
+    description: "Toggle / refresh live footer · /live-status color <truecolor|256|16|none> 로 색 강등 모드",
     handler: async (args, ctx) => {
       const a = (args ?? "").trim();
       if (a === "off") {
@@ -601,7 +612,17 @@ export default function (pi: ExtensionAPI) {
         ctx.ui.notify(`quotas [${quota.provider ?? "?"}]: ${q}`, "info");
         return;
       }
-      ctx.ui.notify(`live-statusline ${footerOn ? "on" : "off"} — usage: /live-status [on|off|refresh]`, "info");
+      if (a.startsWith("color")) {
+          const m = (a.split(/\s+/)[1] ?? "").trim();
+          if (m === "auto" || m === "") delete (globalThis as any)[COLOR_MODE_KEY];
+          else if (["truecolor", "256", "16", "none"].includes(m)) (globalThis as any)[COLOR_MODE_KEY] = m;
+          else { ctx.ui.notify(`모르는 모드: ${m} — truecolor | 256 | 16 | none | auto`, "error"); return; }
+          void update(true);
+          ctx.ui.notify(`색 모드 → ${resolveColorMode()} · 안 보이면 16, 그래도 안 보이면 none(색 없이 판정만)`, "info");
+          return;
+        }
+
+      ctx.ui.notify(`live-statusline ${footerOn ? "on" : "off"} · 색 ${resolveColorMode()} — /live-status [on|off|refresh|color <truecolor|256|16|none>]`, "info");
     },
   });
 }
