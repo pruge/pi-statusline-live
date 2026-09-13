@@ -344,8 +344,8 @@ function renderLine(
   } catch { /* ignore */ }
 
   const parts: string[] = [renderPhase(t, phase, toolName, thinkLevel, tick)];
-  // model + thinking level
-  const lvl = thinkLevel && thinkLevel !== "off" ? t.fg("dim", ` 🧠 ${thinkLevel}`) : "";
+  // model + thinking level (always shown once known, incl. off)
+  const lvl = thinkLevel ? t.fg("dim", ` 🧠 ${thinkLevel}`) : "";
   parts.push(t.fg("accent", `🤖 ${shortenModel(ctx.model)}`) + lvl);
   // ── LIVE quotas (right after model/thinking) + always-visible provider tag ──
   // Quota bars only exist for Anthropic / Codex / OpenCode Go, but the ⚡provider
@@ -437,7 +437,11 @@ export default function (pi: ExtensionAPI) {
   }
   function syncThinkLevel(ctx: ExtensionContext) {
     try {
-      const lvl = (ctx as any).thinkingLevel ?? (pi as any).getThinkingLevel?.();
+      // pi.getThinkingLevel() is authoritative (clamped to model caps;
+      // non-reasoning models always report "off"). ctx.thinkingLevel is fallback.
+      let lvl: unknown;
+      try { lvl = (pi as any).getThinkingLevel?.(); } catch { /* ignore */ }
+      if (typeof lvl !== "string") lvl = (ctx as any).thinkingLevel;
       if (typeof lvl === "string") thinkLevel = lvl;
     } catch { /* ignore */ }
   }
