@@ -13,7 +13,7 @@
  * model_select / session_start). No dependency on either package — standalone.
  */
 
-import { cacheRatio, cacheReadSuffix, cacheTone } from "../src/cache-segment.ts";
+import { cacheRatio, cacheReadSuffix, cacheTone, colorForTone } from "../src/cache-segment.ts";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import { execFileSync } from "node:child_process";
@@ -60,6 +60,10 @@ function fmtTokens(n: number): string {
   if (n < 10000) return `${(n / 1000).toFixed(1)}k`;
   if (n < 1000000) return `${Math.round(n / 1000)}k`;
   return `${(n / 1000000).toFixed(1)}M`;
+}
+/** 창 크기는 "1.0M" 보다 "1M" 로 읽힌다(같은 숫자를 두 번 보지 않게). */
+function fmtWin(n: number): string {
+  return fmtTokens(n).replace(/\.0(M|k)$/, "$1");
 }
 function shortenPath(cwd: string): string {
   const s = cwd.split("/");
@@ -377,27 +381,29 @@ function renderLine(
   // context (cyan, bold; red when critical)
   if (ctxWin > 0 && ctxPct >= 0) {
     const col = gaugeColor("ctx", ctxPct);
-    parts.push(t.bold(t.fg(col, `${ctxPct}%`)) + t.fg("dim", ` ${fmtTokens(ctxCur)}tok [`) + gaugeBar(t, "ctx", ctxPct) + t.fg("dim", `] ${fmtTokens(Math.max(0, ctxWin - ctxCur))} left`));
+    // 창 대비 사용량 하나를 두 번 말하지 않는다(백분율 + 게이지 + "남은 토큰") → "24% [▓▓░░] 236k/1M"
+    parts.push(t.bold(t.fg(col, `${ctxPct}%`)) + t.fg("dim", " [") + gaugeBar(t, "ctx", ctxPct) + t.fg("dim", `] ${fmtTokens(ctxCur)}/`) + t.fg("accent", fmtWin(ctxWin)));
   }
   // cost
   if (stats.cost > 0) parts.push(t.fg("dim", `$${stats.cost.toFixed(2)}`));
   // tokens
+  // 토큰·캐시는 하나의 조각으로 합친다 — parts 는 " │ " 로 join 되므로 따로 push 하면
+  // ↑ ↓ 와 R 사이에 세로줄이 생겨 한 그룹으로 안 읽힌다(실측: "↓671k │ R255.8M·89%").
   const tok: string[] = [];
   if (stats.input > 0) tok.push(`↑${fmtTokens(stats.input)}`);
   if (stats.output > 0) tok.push(`↓${fmtTokens(stats.output)}`);
-  // 캐시 히트율은 R 에 접미어로 붙인다(별도 조각은 좁은 판에서 잘린다). 색은 판정이다:
-  // 85↑ success / 60↑ warning / 그 아래 error = 브리핑·도구블록·TTL 규칙 중 하나를 어기고 있다.
+  // 캐시 히트율은 R 에 접미어로(별도 조각은 좁은 판에서 잘린다). 색이 판정이다:
+  // 85%↑ success · 60%↑ warning · 아래 error = 브리핑·도구블록·TTL 규칙 중 하나를 어기고 있다.
   const rw = cacheReadSuffix(stats);
   const rTone = cacheTone(cacheRatio(stats));
-  const rColor = rTone === "good" ? "success" : rTone === "warn" ? "warning" : rTone === "bad" ? "error" : "dim";
-  if (stats.cacheRead > 0) {
-    if (tok.length) parts.push(t.fg("dim", tok.join(" ") + " "));
-    parts.push(t.fg(rColor, `R${fmtTokens(stats.cacheRead)}${rw}`));
-    if (stats.cacheWrite > 0) parts.push(t.fg("dim", ` W${fmtTokens(stats.cacheWrite)}`));
-  } else {
-    if (stats.cacheWrite > 0) tok.push(`W${fmtTokens(stats.cacheWrite)}`);
-    if (tok.length) parts.push(t.fg("dim", tok.join(" ")));
-  }
+  // 테마에 그 이름이 없으면 무색으로 뜨므로 물어본다. 색이 없으면 bold 로 격상(판정은 남긴다).
+  const rColor = colorForTone(t, rTone);
+  const seg: string[] = [];
+  if (tok.length) seg.push(t.fg("dim", tok.join(" ")));
+  const rTxt = `R${fmtTokens(stats.cacheRead || 0)}${rw}`;
+  if (rw) seg.push(rColor ? t.fg(rColor, rTxt) : t.bold(rTxt));
+  if (stats.cacheWrite > 0) seg.push(t.fg("dim", `W${fmtTokens(stats.cacheWrite)}`));
+  if (seg.length) parts.push(seg.join(" "));
 
   const sep = t.fg("dim", " │ ");
   return truncateToWidth(parts.join(sep), width);
@@ -545,6 +551,25 @@ export default function (pi: ExtensionAPI) {
     // Release singleton so the reloaded extension can take over the footer.
     // Only the owner clears — inert duplicates have no shutdown handler.
     try { if (g[GUARD_KEY] === instanceId) delete g[GUARD_KEY]; } catch { /* ignore */ }
+  });
+
+  pi.registerCommand("legend", {
+    description: "푸터의 ↑ ↓ R·89% W 숫자가 각각 무엇을 세는지 설명한다",
+    handler: async (_args, ctx) => {
+      const t = ctx.ui.theme;
+      ctx.ui.notify(
+        [
+          "↑ 32.2M  캐시에 없는 입력을 맨돈으로 낸 토큰(비쌈 아님·cold 의 증거)",
+          "↓ 671k    모델이生成的한 출력 토큰",
+          "R 255.8M  앞부분을 재사용한(cacheRead) — 클수록 좋다",
+          "·89%      R/(R+W+↑) 히트율. 색: 85%↑ 초록 · 60%↑ 노랑 · 아래 빨강",
+          "(W↑)      이번 세션이 쓴(cacheWrite) 것이 읽은 것보다 많다 = 앞부분이 갈렸다",
+          "W 20.2k   이번 턴에 새로 캐시에 쓴 토큰(1.25×, long TTL 은 2×)",
+          "$0.42     세션 누적 비용 · 24% [▓▓░░] 236k/1M = 컨텍스트 창 사용량",
+        ].join("\n"),
+        "info",
+      );
+    },
   });
 
   pi.registerCommand("live-status", {

@@ -46,3 +46,29 @@ export function cacheReadSuffix(s: CacheStats): string {
 	if (r == null || s.cacheRead + s.cacheWrite === 0) return "";
 	return `·${Math.round(r * 100)}%` + (s.cacheWrite > s.cacheRead ? "(W↑)" : "");
 }
+
+/**
+ * 테마가 그 이름에 실제로 색을 주는지 **물어보고** 고른다.
+ * `t.fg("success", x)` 가 이스케이프를 하나도 붙이지 않으면 그 테마에는 success 항이 없는 것이다 —
+ * 그때는 조용히 무색로 뜨므로(실측: 히트율이 초록이 아니라 회색), 색을 내는 항목으로 갈아탄다.
+ */
+export type ThemeLike = { fg: (name: string, s: string) => string };
+
+export function pickColor(t: ThemeLike, want: string[], probe = "\u0000x"): string | null {
+	for (const name of want) {
+		let out = "";
+		try {
+			out = t.fg(name, probe) ?? "";
+		} catch {
+			continue;
+		}
+		if (out.includes("\u001b") || out.includes("\x1b")) return name;
+	}
+	return null;
+}
+
+/** 판정(tone) → 테마에서 실제로 색을 내는 이름. 없으면 null(부르는 쪽에서 bold 로 격상한다). */
+export function colorForTone(t: ThemeLike, tone: Tone): string | null {
+	const want = tone === "good" ? ["success", "green", "accent"] : tone === "warn" ? ["warning", "yellow", "accent"] : tone === "bad" ? ["error", "red"] : [];
+	return pickColor(t, want);
+}
