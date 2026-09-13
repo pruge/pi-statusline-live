@@ -13,7 +13,7 @@
  * model_select / session_start). No dependency on either package — standalone.
  */
 
-import { cacheRatio, cacheReadSuffix, cacheTone, cachePaint, colorForTone } from "../src/cache-segment.ts";
+import { cacheRatio, cacheReadSuffix, cacheTone, cachePaint, colorForTone, GOOD_OPTIONS } from "../src/cache-segment.ts";
 import { detectColorMode, downgradeAnsi, paintLiteral } from "../src/ansi.ts";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
@@ -407,7 +407,7 @@ function renderLine(
   // 색 배치(주제 무관 16색, bad 만 bold): 85%↑ 초록 · 60%↑ 노랑+! · 아래 빨강+!!(+W↑)
   // 테마 경유가 필요하면 /live-status cache theme — dark 의 success(#b5bd68) 는 text 와 구별이 안 된다.
   const cacheMode = ((globalThis as any)[CACHE_COLOR_MODE_KEY] ?? "literal") === "theme" ? "theme" : "literal";
-  const paint = cachePaint(rTone, cacheMode, cacheMode === "theme" ? colorForTone(t, rTone) : undefined);
+  const paint = cachePaint(rTone, cacheMode, cacheMode === "theme" ? colorForTone(t, rTone) : undefined, (globalThis as any)[CACHE_GOOD_CODE_KEY]);
   const seg: string[] = [];
   if (tok.length) seg.push(t.fg("dim", tok.join(" ")));
   const rTxt = `R${fmtTokens(stats.cacheRead || 0)}${rw}`;
@@ -434,6 +434,7 @@ const GUARD_KEY = "__piStatuslineLiveLoaded";
 const FOOTER_ON_KEY = "__piStatuslineLiveFooterOn";
 const COLOR_MODE_KEY = "__piStatuslineColorMode";
 const CACHE_COLOR_MODE_KEY = "__piStatuslineCacheColors";
+const CACHE_GOOD_CODE_KEY = "__piStatuslineCacheGood";
 
 export default function (pi: ExtensionAPI) {
   const g = globalThis as any;
@@ -591,7 +592,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerCommand("live-status", {
-    description: "Toggle / refresh live footer · /live-status color <truecolor|256|16|none> 로 색 강등 모드",
+    description: "Toggle / refresh live footer · color <truecolor|256|16|none> · cache [literal|theme|good <cyan|green|blue>]",
     handler: async (args, ctx) => {
       const a = (args ?? "").trim();
       if (a === "off") {
@@ -629,7 +630,33 @@ export default function (pi: ExtensionAPI) {
           return;
         }
 
-      ctx.ui.notify(`live-statusline ${footerOn ? "on" : "off"} · 색 ${resolveColorMode()} — /live-status [on|off|refresh|color <truecolor|256|16|none>]`, "info");
+      if (a.startsWith("cache")) {
+        const ps = a.split(/\s+/);
+        const m = (ps[1] ?? "").trim();
+        if (m === "good") {
+          const w = (ps[2] ?? "").trim().toLowerCase();
+          const code = GOOD_OPTIONS[w];
+          if (code == null) {
+            ctx.ui.notify(`선택지: ${Object.keys(GOOD_OPTIONS).join(" | ")} — 지금 '정상' 코드는 ${(globalThis as any)[CACHE_GOOD_CODE_KEY] ?? 36}(기본 시안)`, "error");
+            return;
+          }
+          (globalThis as any)[CACHE_GOOD_CODE_KEY] = code;
+          void update(true);
+          ctx.ui.notify(`캐시 '정상' 색 → SGR ${code} (${w}) · 이 터미널에서 32(초록)가 khaki 로 보이면 36(시안)/94(밝은 파랑)를 써라`, "info");
+          return;
+        }
+        if (m === "theme" || m === "literal") (globalThis as any)[CACHE_COLOR_MODE_KEY] = m;
+        else if (m === "" || m === "auto") delete (globalThis as any)[CACHE_COLOR_MODE_KEY];
+        else {
+          ctx.ui.notify(`캐시 색: /live-status cache [literal|theme|auto] · good <${Object.keys(GOOD_OPTIONS).join("|")}>`, "error");
+          return;
+        }
+        void update(true);
+        ctx.ui.notify(`캐시 판정 색 → ${m || "literal(기본)"} · literal 은 SGR 36/33/31 을 bold(주제 무관), theme 은 success/warning/error 를 탄다`, "info");
+        return;
+      }
+
+      ctx.ui.notify(`live-statusline ${footerOn ? "on" : "off"} · 색 ${resolveColorMode()} · 캐시 ${((globalThis as any)[CACHE_COLOR_MODE_KEY] ?? "literal")}/good ${((globalThis as any)[CACHE_GOOD_CODE_KEY] ?? 36)} — /live-status [on|off|refresh|color <m>|cache [literal|theme|good <c>]]`, "info");
     },
   });
 }

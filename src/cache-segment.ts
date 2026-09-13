@@ -90,17 +90,20 @@ export function cacheEmphasis(tone: Tone): Emphasis {
 
 /** 캐시 조각을 어떻게 칠 것인가 — good 도 색을 받는다(사용자 취향: 정상=초록). */
 export type CachePaint = { kind: "literal"; code: number; bold: boolean } | { kind: "theme"; name: string; bold: boolean } | { kind: "none" };
-export const CACHE_LITERAL = { good: 32, warn: 33, bad: 31 };
+export const CACHE_LITERAL: { good: number; warn: number; bad: number } = { good: 36, warn: 33, bad: 31 };
+/** good 는 바꿀 수 있게 둔다: 이 터미널들의 SGR 32 는 낮게 채도된 khaki 다(관측 — 사용자는
+ *  #00d7ff(시안) 를 "초록"이라 부르고 32 를 "조금 진한 회색"이라 불렀다). 채도가 보장되는 36 이 기본. */
+export const GOOD_OPTIONS: Record<string, number> = { cyan: 36, green: 32, brightgreen: 92, blue: 94, teal: 36 };
 
 /**
- * mode = "literal"(기본) → 16색 리터럴. 어떤 터미널에서도 계열이 보존된다.
+ * mode = "literal"(기본) → 16색 리터럴. 주제를 타지 않아 터미널 팔레트로 매핑된다.
  * mode = "theme" → 주제의 success/warning/error 를 쓴다(주제 팔레트를 신뢰할 때만).
- * bad 만 bold — 빨강+굵기가 "지금 당장 보라"는 유일한 강조여야 한다.
+ * 세 band 다 bold — 회색(dim) 토큰들 사이에 떠야 하는 판정이기 때문이다.
  */
-export function cachePaint(tone: Tone, mode: "literal" | "theme" = "literal", themeRole?: string | null): CachePaint {
+export function cachePaint(tone: Tone, mode: "literal" | "theme" = "literal", themeRole?: string | null, goodCode?: number): CachePaint {
 	if (tone === "dim") return { kind: "none" };
-	const bold = tone === "bad";
+	const bold = true;
 	if (mode === "theme" && themeRole) return { kind: "theme", name: themeRole, bold };
-	const code = tone === "good" ? CACHE_LITERAL.good : tone === "warn" ? CACHE_LITERAL.warn : CACHE_LITERAL.bad;
+	const code = tone === "good" ? (goodCode ?? CACHE_LITERAL.good) : tone === "warn" ? CACHE_LITERAL.warn : CACHE_LITERAL.bad;
 	return { kind: "literal", code, bold };
 }

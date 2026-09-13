@@ -1,7 +1,7 @@
 // 캐시 조각의 회귀 — 이 값들이 푸터에 뜨는 문자열이다.
 // 숫자는 지어낸 게 아니라 실세션에서 가져왔다(cache-report 로 뽑은 것들).
 import assert from "node:assert/strict";
-const { cacheRatio, cacheTone, cacheLabel, cacheReadSuffix, pickColor, colorForTone, cacheEmphasis, cachePaint, CACHE_LITERAL } = await import("./cache-segment.ts");
+const { cacheRatio, cacheTone, cacheLabel, cacheReadSuffix, pickColor, colorForTone, cacheEmphasis, cachePaint, CACHE_LITERAL, GOOD_OPTIONS } = await import("./cache-segment.ts");
 
 // 이 오케스트레이터 세션: ↑32.0M ↓665k R254.9M
 assert.equal(cacheReadSuffix({ input: 32_000_000, cacheRead: 254_900_000, cacheWrite: 0 }), "·89%");
@@ -52,11 +52,12 @@ assert.equal(cacheEmphasis("dim"), "quiet");
 assert.equal(cacheEmphasis("warn"), "loud");
 assert.equal(cacheEmphasis("bad"), "loud");
 // 색 배치: 정상=초록 · warn=노랑 · bad=빨강+bold (주제 무관 16색이 기본)
-assert.deepEqual(cachePaint("good"), { kind: "literal", code: 32, bold: false });
-assert.deepEqual(cachePaint("warn"), { kind: "literal", code: 33, bold: false });
+assert.deepEqual(cachePaint("good"), { kind: "literal", code: 36, bold: true }, "good 는 시안 — 이 터미널의 SGR 32 는 khaki");
+assert.deepEqual(cachePaint("warn"), { kind: "literal", code: 33, bold: true });
 assert.deepEqual(cachePaint("bad"), { kind: "literal", code: 31, bold: true });
+assert.deepEqual(cachePaint("good", "literal", null, 32), { kind: "literal", code: 32, bold: true }, "/live-status cache good green 으로 되돌리기");
 assert.deepEqual(cachePaint("dim"), { kind: "none" });
 assert.deepEqual(cachePaint("bad", "theme", "error"), { kind: "theme", name: "error", bold: true });
-assert.deepEqual(cachePaint("good", "theme", null), { kind: "literal", code: 32, bold: false }, "테마에 색이 없으면 리터럴로 돌아온다");
-assert.equal(CACHE_LITERAL.good, 32);
+assert.deepEqual(cachePaint("good", "theme", null), { kind: "literal", code: 36, bold: true }, "테마에 색이 없으면 리터럴로");
+assert.equal(GOOD_OPTIONS.cyan, 36);
 console.log("  ✓ 캐시 색 7 케이스 · ansi 강등 11 케이스 (herdr/tmux 에서 truecolor 가 삼켜지는 경우 대비)");
