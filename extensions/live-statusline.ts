@@ -13,7 +13,7 @@
  * model_select / session_start). No dependency on either package — standalone.
  */
 
-import { cacheLabel, cacheRatio, cacheTone } from "../src/cache-segment.ts";
+import { cacheRatio, cacheReadSuffix, cacheTone } from "../src/cache-segment.ts";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import { execFileSync } from "node:child_process";
@@ -385,15 +385,18 @@ function renderLine(
   const tok: string[] = [];
   if (stats.input > 0) tok.push(`↑${fmtTokens(stats.input)}`);
   if (stats.output > 0) tok.push(`↓${fmtTokens(stats.output)}`);
-  if (stats.cacheRead > 0) tok.push(`R${fmtTokens(stats.cacheRead)}`);
-  if (stats.cacheWrite > 0) tok.push(`W${fmtTokens(stats.cacheWrite)}`);
-  if (tok.length) parts.push(t.fg("dim", tok.join(" ")));
-
-  // 캐시 히트율 — 색은 판정이다(85↑ success / 60↑ warning / 그 아래 error = 규칙 위반을 의심하라).
-  const cl = cacheLabel(stats);
-  if (cl) {
-    const tone = cacheTone(cacheRatio(stats));
-    parts.push(t.fg(tone === "good" ? "success" : tone === "warn" ? "warning" : tone === "bad" ? "error" : "dim", cl));
+  // 캐시 히트율은 R 에 접미어로 붙인다(별도 조각은 좁은 판에서 잘린다). 색은 판정이다:
+  // 85↑ success / 60↑ warning / 그 아래 error = 브리핑·도구블록·TTL 규칙 중 하나를 어기고 있다.
+  const rw = cacheReadSuffix(stats);
+  const rTone = cacheTone(cacheRatio(stats));
+  const rColor = rTone === "good" ? "success" : rTone === "warn" ? "warning" : rTone === "bad" ? "error" : "dim";
+  if (stats.cacheRead > 0) {
+    if (tok.length) parts.push(t.fg("dim", tok.join(" ") + " "));
+    parts.push(t.fg(rColor, `R${fmtTokens(stats.cacheRead)}${rw}`));
+    if (stats.cacheWrite > 0) parts.push(t.fg("dim", ` W${fmtTokens(stats.cacheWrite)}`));
+  } else {
+    if (stats.cacheWrite > 0) tok.push(`W${fmtTokens(stats.cacheWrite)}`);
+    if (tok.length) parts.push(t.fg("dim", tok.join(" ")));
   }
 
   const sep = t.fg("dim", " │ ");

@@ -30,10 +30,19 @@ export function cacheTone(r: number | null): Tone {
 	return "bad";
 }
 
-/** 라벨: "cache 89%" · 쓰기 우세면 "cache 12%(W↑)" — write 가 read 보다 크면 색만으론 안 보인다. */
+/** 라벨: "cache 89%" · 쓰기 우세면 "(W↑)" 를 붙인다(write 가 read 보다 크면 색만으론 이유를 모른다). */
 export function cacheLabel(s: CacheStats): string | null {
 	const r = cacheRatio(s);
 	if (r == null || s.cacheRead + s.cacheWrite === 0) return null;
-	const pct = Math.round(r * 100);
-	return `cache ${pct}%` + (s.cacheWrite > s.cacheRead ? "(W↑)" : "");
+	return `cache ${Math.round(r * 100)}%` + (s.cacheWrite > s.cacheRead ? "(W↑)" : "");
+}
+
+/**
+ * 좁은 판에서는 별도 조각이 잘린다(트럭에이션은 뒤부터 먹는다). 그래서 비율을 R 토큰에
+ * 접미어로 붙이는 형태도 제공한다: "R254.9M·89%" / "R97.2k·28%(W↑)".
+ */
+export function cacheReadSuffix(s: CacheStats): string {
+	const r = cacheRatio(s);
+	if (r == null || s.cacheRead + s.cacheWrite === 0) return "";
+	return `·${Math.round(r * 100)}%` + (s.cacheWrite > s.cacheRead ? "(W↑)" : "");
 }
