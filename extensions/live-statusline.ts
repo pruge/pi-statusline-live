@@ -151,8 +151,10 @@ function fmtReset(resetsAt: number): string {
   if (m < 1) return "<1m";
   if (m < 60) return `${m}m`;
   const h = Math.floor(m / 60);
-  if (h < 48) return `${h}h`;
-  return `${Math.floor(h / 24)}d`;
+  if (h < 24) return `${h}h`;
+  const d = Math.floor(h / 24);
+  const rh = h % 24;
+  return rh > 0 ? `${d}d ${rh}h` : `${d}d`;
 }
 
 // ── git (cached) ──
@@ -406,9 +408,9 @@ function renderLine(
   const quotaChips: string[] = quota.chips.map((c) => {
     const used = Math.max(0, Math.min(100, Math.round(100 - c.remainPct)));
     const col = gaugeColor(c.label, used);
-    // context 게이지와 같은 [퍼센트 게이지 숫자] 패턴 → "2% ░░░░░░░░░░ 5h·4h".
-    const tail = c.resetsAt ? `${c.label}·${fmtReset(c.resetsAt)}` : c.label;
-    return t.bold(t.fg(col, `${used}%`)) + " " + gaugeBar(t, c.label, used) + t.fg("dim", ` ${tail}`);
+    // 5h/7d 라벨은 빼고 리셋까지 시간만 → "2% ░░░░░░░░░░ 4d 2h" (색으로 5h·노랑 / 7d·초록 구뱄).
+    const tail = fmtReset(c.resetsAt);
+    return t.bold(t.fg(col, `${used}%`)) + " " + gaugeBar(t, c.label, used) + (tail ? t.fg("dim", ` ${tail}`) : "");
   });
   if (activeProvider) parts.push(t.fg("accent", `⚡${providerLabel(activeProvider)}`));
   // path
