@@ -83,6 +83,7 @@ function providerLabel(p?: string): string {
   if (!p) return "?";
   const known: Record<string, string> = {
     anthropic: "Anthropic",
+    "claude-bridge": "Claude",
     "openai-codex": "Codex",
     openai: "OpenAI",
     opencode: "OpenCode Zen",
@@ -204,6 +205,28 @@ async function anthropicToken(ctx: ExtensionContext): Promise<string | undefined
   if (cred?.key) return cred.key;
   return undefined;
 }
+
+// pi-claude-bridge (Claude Code SDK, Pro/Max 구독) 의 OAuth 토큰. 5h/7d(weekly) 는 Claude 구독
+// 한도라 anthropic 과 같은 oauth/usage 엔드포인트가 답한다 — 토큰만 찾으면 fetchAnthropic 를 재사용한다.
+// 출처 순서(모두 실패하면 undefined → 게이지 없이 ⚡Claude 칩만): 셋 다 자동, 하나라도 되면 auto-fill.
+//   1) 환경변수 CLAUDE_CODE_OAUTH_TOKEN (명시 override — 확장/CI 용)
+//   2) ~/.claude/.credentials.json 의 claudeAiOauth.accessToken (파일 기반 = Linux)
+//   3) macOS Keychain "Claude Code-credentials" 의 claudeAiOauth.accessToken
+function claudeBridgeToken(): string | undefined {
+  const env = process.env.CLAUDE_CODE_OAUTH_TOKEN?.trim();
+  if (env) return env;
+  const file = readJson(join(homedir(), ".claude", ".credentials.json"));
+  const fromFile = file?.claudeAiOauth?.accessToken;
+  if (typeof fromFile === "string" && fromFile) return fromFile;
+  if (process.platform === "darwin") {
+    try {
+      const raw = execFileSync("security", ["find-generic-password", "-s", "Claude Code-credentials", "-w"], { timeout: 3000, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+      const tok = JSON.parse(raw)?.claudeAiOauth?.accessToken;
+      if (typeof tok === "string" && tok) return tok;
+    } catch { /* keychain 없음·접근 거부·미로그인 → 게이지 없이 진행(확장점: 위 env 로 주입) */ }
+  }
+  return undefined;
+}
 async function codexCreds(ctx: ExtensionContext): Promise<{ token?: string; accountId?: string }> {
   let token: string | undefined;
   try {
@@ -297,7 +320,7 @@ async function fetchOpenCodeGo(): Promise<QuotaChip[]> {
 
 // per-provider cache (anthropic 5min, others 60s)
 const quotaCache = new Map<string, QuotaState>();
-const TTL: Record<string, number> = { anthropic: 5 * 60_000, "openai-codex": 60_000, "opencode-go": 60_000 };
+const TTL: Record<string, number> = { anthropic: 5 * 60_000, "claude-bridge": 5 * 60_000, "openai-codex": 60_000, "opencode-go": 60_000 };
 
 async function refreshQuotas(ctx: ExtensionContext, force = false): Promise<QuotaState> {
   const provider = (() => { try { return ctx.model?.provider; } catch { return undefined; } })();
@@ -310,6 +333,10 @@ async function refreshQuotas(ctx: ExtensionContext, force = false): Promise<Quot
   try {
     if (provider === "anthropic") {
       state.chips = await fetchAnthropic(await anthropicToken(ctx));
+      if (state.chips.length === 0) state.error = "no-oauth";
+    } else if (provider === "claude-bridge") {
+      // pi-claude-bridge = Claude 구독. 5h/7d 는 anthropic 과 동일 엔드포인트 — 토큰만 다른 출처.
+      state.chips = await fetchAnthropic(claudeBridgeToken());
       if (state.chips.length === 0) state.error = "no-oauth";
     } else if (provider === "openai-codex") {
       const { token, accountId } = await codexCreds(ctx);
