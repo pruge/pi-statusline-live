@@ -398,10 +398,10 @@ function renderLine(
   if (quota.chips.length > 0) {
     quotaGauges = quota.chips.map((c) => {
       const used = Math.max(0, Math.min(100, Math.round(100 - c.remainPct)));
-      const remain = Math.max(0, Math.min(100, Math.round(c.remainPct)));
       const col = gaugeColor(c.label, used);
-      const reset = c.resetsAt ? t.fg("dim", ` ⏳ ${fmtReset(c.resetsAt)}`) : "";
-      return t.fg("dim", `${c.label} `) + t.bold(t.fg(col, `${used}%`)) + t.fg("dim", "[") + gaugeBar(t, c.label, used) + t.fg("dim", "]") + t.fg("dim", `${remain}%`) + reset;
+      // "31m/5h 35% ▓▓▓░░░░░░░" — reset㏴ 앞으로, 괄호 없이.
+      const reset = c.resetsAt ? t.fg("dim", `${fmtReset(c.resetsAt)}/`) : "";
+      return reset + t.fg("dim", `${c.label} `) + t.bold(t.fg(col, `${used}%`)) + " " + gaugeBar(t, c.label, used);
     }).join(t.fg("dim", " "));
   }
   if (activeProvider) parts.push(t.fg("accent", `⚡${providerLabel(activeProvider)}`));
@@ -419,8 +419,8 @@ function renderLine(
   // context (cyan, bold; red when critical)
   if (ctxWin > 0 && ctxPct >= 0) {
     const col = gaugeColor("ctx", ctxPct);
-    // 창 대비 사용량 하나를 두 번 말하지 않는다(백분율 + 게이지 + "남은 토큰") → "24% [▓▓░░] 236k/1M"
-    parts.push(t.bold(t.fg(col, `${ctxPct}%`)) + t.fg("dim", " [") + gaugeBar(t, "ctx", ctxPct) + t.fg("dim", `] ${fmtTokens(ctxCur)}/`) + t.fg("accent", fmtWin(ctxWin)));
+    // 창 대비 사용량 하나를 두 번 말하지 않는다(백분율 + 게이지 + "남은 토큰") → "24% ▓▓░░ 236k/1M"
+    parts.push(t.bold(t.fg(col, `${ctxPct}%`)) + " " + gaugeBar(t, "ctx", ctxPct) + t.fg("dim", ` ${fmtTokens(ctxCur)}/`) + t.fg("accent", fmtWin(ctxWin)));
   }
   // 5h/7d quota gauges — placed right next to the context gauge.
   if (quotaGauges) parts.push(quotaGauges);
