@@ -67,3 +67,18 @@ export type LiteralKey = keyof typeof LITERAL;
 export function paintLiteral(code: number, text: string, bold = false): string {
 	return `\u001b[${bold ? "1;" : ""}${code}m${text}\u001b[0m`;
 }
+
+/**
+ * 푸터 조각을 **줄로 접는다**: 잘림이 아니라 개행으로 남긴다.
+ * 한 줄에 다 싣면 폭이 모자라 뒷부분(숫자)이 잘리고, 잘린 숫자는 숫자가 아니다.
+ * parts 안의 marker 위치로 자르고, 각 줄을 width 에 맞춰 별도 잘라 돌려준다.
+ */
+export function foldLines(parts: string[], sep: string, marker: string, width: number, truncate: (s: string, w: number) => string): string[] {
+	const cut = parts.indexOf(marker);
+	const halves = cut < 0 ? [parts] : [parts.slice(0, cut), parts.slice(cut + 1)];
+	const lines = halves
+		.map((h) => h.filter((x) => x && x !== marker))
+		.filter((h) => h.length)
+		.map((h) => truncate(h.join(sep), Math.max(10, width)));
+	return lines.length ? lines : [""];
+}

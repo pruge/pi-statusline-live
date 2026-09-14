@@ -5,6 +5,7 @@
  *  - @wierdbytes/pi-statusline (base UI: model / path / git / context / cost / tokens)
  *  - @latentminds/pi-quotas (realtime quota fetch: Anthropic 5h/7d, Codex 5h/7d, OpenCode Go 5h/weekly)
  *
+ * 0.2.14: 두 줄 footer — 1줄 식별(모델·경로·git), 2줄 수치(컨텍스트·비용·토큰·캐시)
  * 0.2.0: the line moved into the native footer slot via ctx.ui.setFooter()
  * (replaces pi's built-in `cwd │ tokens` footer). Above-editor widget removed.
  * A live phase chip leads the line: idle / think / run / tool.
@@ -14,7 +15,7 @@
  */
 
 import { cacheRatio, cacheReadSuffix, cacheTone, cachePaint, colorForTone, GOOD_OPTIONS } from "../src/cache-segment.ts";
-import { detectColorMode, downgradeAnsi, paintLiteral } from "../src/ansi.ts";
+import { detectColorMode, downgradeAnsi, foldLines, paintLiteral } from "../src/ansi.ts";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import { execFileSync } from "node:child_process";
@@ -346,7 +347,7 @@ function renderPhase(t: any, phase: Phase, toolName: string, thinkLevel: string,
 function renderLine(
   ctx: ExtensionContext, width: number, quota: QuotaState,
   phase: Phase, toolName: string, thinkLevel: string, tick: number,
-): string {
+): string[] {
   const t = ctx.ui.theme;
   const stats = gatherStats(ctx);
   let ctxPct = -1, ctxCur = 0, ctxWin = 0;
@@ -386,6 +387,7 @@ function renderLine(
     const g = getGit(ctx.cwd);
     if (g.branch) parts.push(t.fg("accent", g.branch) + " " + (g.dirty ? t.fg("error", "✗") : t.fg("success", "✓")));
   } catch { /* ignore */ }
+  parts.push(SPLIT_MARK);
   // context (cyan, bold; red when critical)
   if (ctxWin > 0 && ctxPct >= 0) {
     const col = gaugeColor("ctx", ctxPct);
@@ -424,7 +426,9 @@ function renderLine(
   const sep = t.fg("dim", " │ ");
   // 테마가 truecolor 로 내는 색을 터미널/중간 계층(herdr·tmux·구 TERM)이 삼키면
   // 전부 "일반 텍스트 색"으로 뜬다. 그 경우엔 256/16 으로 강등해 보낸다(판정이 색에만 실리면 안 된다).
-  return downgradeAnsi(truncateToWidth(parts.join(sep), width), resolveColorMode());
+  // **두 줄**: 첫 줄은 식별(모델·경로·git), 둘째 줄은 수치(컨텍스트·비용·토큰·캐시).
+  // 한 줄에 다 실으면 폭이 모자라 뒤가 잘리고, 잘린 숫자는 숫자가 아니다(사용자 요구).
+  return foldLines(parts, sep, SPLIT_MARK, width, (x, w) => downgradeAnsi(truncateToWidth(x, w), resolveColorMode()));
 }
 
 // ── extension ──
@@ -437,6 +441,8 @@ const FOOTER_ON_KEY = "__piStatuslineLiveFooterOn";
 const COLOR_MODE_KEY = "__piStatuslineColorMode";
 const CACHE_COLOR_MODE_KEY = "__piStatuslineCacheColors";
 const CACHE_GOOD_CODE_KEY = "__piStatuslineCacheGood";
+/** render 안의 줄 위치 표식(문자 조각이 아니라 자리). */
+const SPLIT_MARK = "\u0000split\u0000";
 
 export default function (pi: ExtensionAPI) {
   const g = globalThis as any;
@@ -491,7 +497,7 @@ export default function (pi: ExtensionAPI) {
         invalidate() {},
         render(width: number): string[] {
           syncThinkLevel(ctx);
-          return [renderLine(ctx, width, quota, phase, toolName, thinkLevel, tick)];
+          return renderLine(ctx, width, quota, phase, toolName, thinkLevel, tick);
         },
       };
     });

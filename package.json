@@ -1,6 +1,6 @@
 {
   "name": "pi-statusline-live",
-  "version": "0.2.13",
+  "version": "0.2.14",
   "description": "Realtime pi statusline: wierdbytes-style footer (model/path/git/context/cost/tokens) + live Anthropic 5h/7d, Codex 5h/7d, OpenCode Go quotas",
   "type": "module",
   "license": "MIT",

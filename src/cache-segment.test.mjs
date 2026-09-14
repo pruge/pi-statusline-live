@@ -31,7 +31,7 @@ assert.equal(colorForTone(colored, "bad"), "error");
 assert.equal(colorForTone(colorless, "good"), null, "테마가 무색이면 null — 부르는 쪽이 bold 로 대체한다");
 const partial = { fg: (n, s) => (n === "accent" ? `\u001b[36m${s}\u001b[0m` : s) };
 assert.equal(colorForTone(partial, "good"), "accent", "success 가 없으면 같은 판정의 다른 색으로 갈아탄다");
-console.log("  ✓ cache-segment 16 케이스 — 예: R254.9M 89% / R97.2k 28%(W↑)");
+console.log("  ✓ cache-segment 표시·색·강등·접기 총 48 케이스");
 // ANSI 강등 — truecolor 를 삼키는 터미널에서도 판정이 살아야 한다
 const { detectColorMode, downgradeAnsi } = await import("./ansi.ts");
 const dark = { success: "\u001b[38;2;181;189;104m", warning: "\u001b[38;2;255;255;0m", error: "\u001b[38;2;204;102;102m", dim: "\u001b[38;2;102;102;102m" };
@@ -60,4 +60,18 @@ assert.deepEqual(cachePaint("dim"), { kind: "none" });
 assert.deepEqual(cachePaint("bad", "theme", "error"), { kind: "theme", name: "error", bold: true });
 assert.deepEqual(cachePaint("good", "theme", null), { kind: "literal", code: 36, bold: true }, "테마에 색이 없으면 리터럴로");
 assert.equal(GOOD_OPTIONS.cyan, 36);
-console.log("  ✓ 캐시 색 7 케이스 · ansi 강등 11 케이스 (herdr/tmux 에서 truecolor 가 삼켜지는 경우 대비)");
+
+
+// 푸터 접기(foldLines) — 이걸 붙일 때 앵커가 안 맞아 테스트 없이 "통과"한 적이 있다.
+// 통과가 검사한 코드의 결과가 아니라면 통과가 아니다.
+import { foldLines } from "./ansi.ts";
+const M = "\u0000split\u0000";
+const tr = (x, w) => (x.length > w ? x.slice(0, Math.max(0, w - 1)) + "…" : x);
+assert.deepEqual(foldLines(["A", "B", M, "C", "D"], " | ", M, 80, tr), ["A | B", "C | D"]);
+assert.deepEqual(foldLines(["A", "B"], " | ", M, 80, tr), ["A | B"], "marker 없으면 한 줄");
+assert.deepEqual(foldLines([M, "C"], " | ", M, 80, tr), ["C"], "앞줄이 비면 버린다");
+// 각 줄은 **자기 폭으로** 잘린다(극단히 좁으면 10컬럼 하한 — 1칸짜리 줄은 숫자를 못 싣는다).
+assert.equal(foldLines(["AAAAAAAAAAAAAAAAAAAA", M, "B"], " | ", M, 12, tr)[0], "AAAAAAAAAAA…", "앞줄만 12컬럼으로");
+assert.equal(foldLines(["AAAAAAAAAAAAAAAAAAAA", M, "BBBBBBBBBBBBBBBBBBBB"], " | ", M, 12, tr)[1], "BBBBBBBBBBB…", "뒷줄도 따로");
+assert.equal(foldLines(["AAAAAAAAAA", M, "B"], " | ", M, 5, tr)[0], "AAAAAAAAAA", "하한 10 덕분에 10자는 남는다");
+
