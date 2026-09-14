@@ -5,6 +5,9 @@
  *  - @wierdbytes/pi-statusline (base UI: model / path / git / context / cost / tokens)
  *  - @latentminds/pi-quotas (realtime quota fetch: Anthropic 5h/7d, Codex 5h/7d, OpenCode Go 5h/weekly)
  *
+ * 0.2.16: OpenCode Go 5h/7d 를 API 키로 조회(https://opencode.ai/zen/go/v1/usage).
+ * 대시보드 스크랩(workspaceId + authCookie)은 폴백으로 유지 — 별도 설정 없이 pi auth 의
+ * opencode-go/opencode 키(OPENCODE_API_KEY)만으로 게이지가 뜬다.
  * 0.2.14: 두 줄 footer — 1줄 식별(모델·경로·git), 2줄 수치(컨텍스트·비용·토큰·캐시)
  * 0.2.0: the line moved into the native footer slot via ctx.ui.setFooter()
  * (replaces pi's built-in `cwd │ tokens` footer). Above-editor widget removed.
@@ -271,6 +274,34 @@ async function codexCreds(ctx: ExtensionContext): Promise<{ token?: string; acco
   if (!token) token = codexAuth?.tokens?.access_token ?? codexAuth?.tokens?.accessToken;
   return { token, accountId };
 }
+async function opencodeGoApiKey(ctx: ExtensionContext): Promise<string | undefined> {
+  try {
+    const r: any = ctx.modelRegistry as any;
+    const t = await r?.authStorage?.getApiKey?.("opencode-go")
+      ?? await r?.authStorage?.getApiKey?.("opencode")
+      ?? await r?.getApiKeyForProvider?.("opencode-go")
+      ?? await r?.getApiKeyForProvider?.("opencode");
+    if (typeof t === "string" && t) return expandCommandRef(t);
+  } catch { /* fall through */ }
+  if (process.env.OPENCODE_API_KEY?.trim()) return process.env.OPENCODE_API_KEY.trim();
+  const auth = readJson(join(homedir(), ".pi", "agent", "auth.json"));
+  for (const k of ["opencode-go", "opencode"]) {
+    const v = auth?.[k]?.key ?? auth?.[k]?.access;
+    if (typeof v === "string" && v) {
+      const expanded = expandCommandRef(v);
+      if (expanded) return expanded;
+    }
+  }
+  return undefined;
+}
+// pi auth 의 `!command` 참조(예: `!security find-generic-password -ws 'opencode'`)를 실행해 푼다.
+function expandCommandRef(ref: string): string | undefined {
+  if (!ref.startsWith("!")) return ref.trim() || undefined;
+  try {
+    const out = execFileSync("sh", ["-c", ref.slice(1)], { timeout: 3000, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+    return out || undefined;
+  } catch { return undefined; }
+}
 function opencodeGoConfig(): { workspaceId: string; authCookie: string } | null {
   const w = process.env.OPENCODE_GO_WORKSPACE_ID?.trim();
   const c = process.env.OPENCODE_GO_AUTH_COOKIE?.trim();
@@ -319,12 +350,38 @@ async function fetchCodex(token?: string, accountId?: string): Promise<QuotaChip
   if (sec && pct(sec) != null) out.push({ label: "7d", remainPct: Math.max(0, pct(sec)!), resetsAt: toMs(sec.reset_at ?? sec.reset_time_ms) });
   return out;
 }
-async function fetchOpenCodeGo(): Promise<QuotaChip[]> {
+// OpenCode Go 5h/7d — 1순위: API 키(推論와 같은 키)로 https://opencode.ai/zen/go/v1/usage 조회.
+// 응답: { usage: { rolling: { percent(사용량), resetsAt }, weekly: {...}, monthly: {...} } }.
+// 2순위: 대시보드 스크랩(workspaceId + authCookie) — API 접근이 안 되는 키용 폴백.
+async function fetchOpenCodeGoApi(apiKey?: string): Promise<QuotaChip[]> {
+  if (!apiKey || apiKey.startsWith("!")) return [];
+  let d: any;
+  try {
+    d = await fetchJson("https://opencode.ai/zen/go/v1/usage",
+      { Authorization: `Bearer ${apiKey}`, Accept: "application/json" });
+  } catch { return []; }
+  const u = d?.usage ?? d;
+  const win = (w: any): Omit<QuotaChip, "label"> | null => {
+    if (!w || typeof w.percent !== "number") return null;
+    return { remainPct: Math.max(0, Math.min(100, 100 - w.percent)), resetsAt: toMs(w.resetsAt ?? w.resets_at) };
+  };
+  const out: QuotaChip[] = [];
+  const r = win(u?.rolling); if (r) out.push({ ...r, label: "5h" });
+  const wk = win(u?.weekly); if (wk) out.push({ ...wk, label: "7d" });
+  return out;
+}
+async function fetchOpenCodeGo(ctx?: ExtensionContext): Promise<QuotaChip[]> {
+  try {
+    const apiKey = ctx ? await opencodeGoApiKey(ctx) : process.env.OPENCODE_API_KEY?.trim() || undefined;
+    const viaApi = await fetchOpenCodeGoApi(apiKey);
+    if (viaApi.length) return viaApi;
+  } catch { /* fall through to scrape */ }
   const cfg = opencodeGoConfig();
   if (!cfg) return [];
   const url = `https://opencode.ai/workspace/${encodeURIComponent(cfg.workspaceId)}/go`;
   const combined = AbortSignal.any([AbortSignal.timeout(10000)]);
-  const res = await fetch(url, { headers: { Cookie: cfg.authCookie, "User-Agent": "Mozilla/5.0" }, signal: combined });
+  const cookie = cfg.authCookie.includes("=") ? cfg.authCookie : `auth=${cfg.authCookie}`;
+  const res = await fetch(url, { headers: { Cookie: cookie, "User-Agent": "Mozilla/5.0" }, signal: combined });
   if (!res.ok) throw new Error(`Go HTTP ${res.status}`);
   const html = await res.text();
   const grab = (key: string): { pct: number; resetSec: number } | null => {
@@ -369,7 +426,7 @@ async function refreshQuotas(ctx: ExtensionContext, force = false): Promise<Quot
       state.chips = await fetchCodex(token, accountId);
       if (state.chips.length === 0) state.error = "no-creds";
     } else if (provider === "opencode" || provider === "opencode-go") {
-      state.chips = await fetchOpenCodeGo();
+      state.chips = await fetchOpenCodeGo(ctx);
       if (state.chips.length === 0) state.error = "no-go-config";
     } else {
       // background: still try anthropic so switching back is instant — but don't show

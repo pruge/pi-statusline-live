@@ -51,7 +51,7 @@ pi -e github.com/pruge/pi-statusline-live
 | `tokens` | `↑in ↓out R W` session totals |
 | `⚡Anthropic 5h 7d` | Anthropic OAuth usage (`api.anthropic.com/api/oauth/usage`), remaining % + reset |
 | `⚡Codex 5h 7d` | OpenAI Codex (`chatgpt.com/backend-api/wham/usage`) |
-| `⚡OpenCode Go 5h 7d` | OpenCode Go dashboard scrape |
+| `⚡OpenCode Go 5h 7d` | OpenCode Go API key (`/zen/go/v1/usage`; dashboard scrape as fallback) |
 
 ## Commands
 
@@ -67,7 +67,7 @@ No extra setup — reads what pi already has:
 
 - Anthropic: `~/.pi/agent/auth.json` (`anthropic` OAuth, `/login anthropic`). `sk-ant-api*` keys have no subscription usage → chip hidden.
 - Codex: pi auth `openai-codex` + `~/.codex/auth.json` account id.
-- OpenCode Go: `OPENCODE_GO_WORKSPACE_ID` + `OPENCODE_GO_AUTH_COOKIE`, or `~/.config/opencode/opencode-quota/opencode-go.json`.
+- OpenCode Go: pi auth `opencode-go` / `opencode` key (or `OPENCODE_API_KEY`) — no setup. Dashboard scrape (`OPENCODE_GO_WORKSPACE_ID` + `OPENCODE_GO_AUTH_COOKIE`, or `~/.config/opencode/opencode-quota/opencode-go.json`) stays as fallback for keys without API access.
 
 ## Credits
 
