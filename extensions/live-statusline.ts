@@ -40,32 +40,32 @@ type QuotaState = {
   provider?: string;
 };
 
-// ── gauges: Claude Code's own colors, red when critical ──
-// context → clay #d97757 (the CLI's context meter); 5h/7d → light blue #6da7ec
-// (the CLI's usage/limit bars). % numbers share the bar color; >= 90% → red.
+// ── gauge colors ──
+// context → fullness signal: green (roomy) → yellow (>=60%) → red (>=90%),
+// so a low % never reads as danger. 5h/7d → Claude Code usage light blue
+// #6da7ec. % number shares its bar color.
 const GAUGE_CRIT = 90;
+const GAUGE_WARN = 60;
 type GaugeColor = "borderAccent" | "warning" | "success" | "error";
 function gaugeColor(label: string, used: number): GaugeColor {
   if (used >= GAUGE_CRIT) return "error";
   if (label === "5h") return "warning";
   if (label === "7d") return "success";
-  return "borderAccent"; // fallback (real colors come from gaugeTC/truecolor)
+  // context + fallback: fullness signal (green → yellow → red at GAUGE_CRIT).
+  return used >= GAUGE_WARN ? "warning" : "success";
 }
-// Claude Code truecolor accents, emitted raw so downgradeAnsi() can step them
-// down for 256/16-color terminals: clay #d97757 (context meter) and the CLI's
-// usage/limit light blue #6da7ec.
-const TC_CLAY = "38;2;217;119;87";
+// Claude Code's usage/limit light blue #6da7ec, emitted raw so downgradeAnsi()
+// can step it down for 256/16-color terminals.
 const TC_SKY = "38;2;109;167;236";
 function paintTC(seq: string, text: string, bold = false): string {
   return `\u001b[${bold ? "1;" : ""}${seq}m${text}\u001b[0m`;
 }
-// Truecolor sequence for a gauge, or null when the theme color should be used
-// (>= 90% critical → red via gaugeColor).
+// Truecolor sequence for a gauge, or null to use the theme color from
+// gaugeColor (context fullness signal, and the >= 90% red).
 function gaugeTC(label: string, used: number): string | null {
   if (used >= GAUGE_CRIT) return null;
-  if (label === "ctx") return TC_CLAY;
   if (label === "5h" || label === "7d") return TC_SKY;
-  return null;
+  return null; // context uses the theme fullness color
 }
 // The colored "NN%" number for a gauge.
 function gaugePct(t: any, label: string, used: number): string {
@@ -438,7 +438,7 @@ function renderLine(
     if (g.branch) parts.push(t.fg("accent", g.branch) + " " + (g.dirty ? t.fg("error", "✗") : t.fg("success", "✓")));
   } catch { /* ignore */ }
   parts.push(SPLIT_MARK);
-  // context (Claude clay #d97757, bold; red when critical)
+  // context (fullness signal: green → yellow → red)
   if (ctxWin > 0 && ctxPct >= 0) {
     // 창 대비 사용량 하나를 두 번 말하지 않는다(백분율 + 게이지 + "남은 토큰") → "24% ▓▓░░ 236k/1M"
     parts.push(gaugePct(t, "ctx", ctxPct) + " " + gaugeBar(t, "ctx", ctxPct) + t.fg("dim", ` ${fmtTokens(ctxCur)}/`) + t.fg("accent", fmtWin(ctxWin)));
