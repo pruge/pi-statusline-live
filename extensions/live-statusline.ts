@@ -41,7 +41,8 @@ type QuotaState = {
 };
 
 // ── gauges: fixed identity colors (strong + distinct), red when critical ──
-// context → cyan (borderAccent), 5h → yellow (warning), 7d → green (success).
+// context → Claude Code's clay #d97757 (matches the CLI's own context meter),
+// 5h → yellow (warning), 7d → green (success).
 // % numbers share the bar color; any gauge >= 90% flips to error (red).
 const GAUGE_CRIT = 90;
 type GaugeColor = "borderAccent" | "warning" | "success" | "error";
@@ -49,13 +50,21 @@ function gaugeColor(label: string, used: number): GaugeColor {
   if (used >= GAUGE_CRIT) return "error";
   if (label === "5h") return "warning";
   if (label === "7d") return "success";
-  return "borderAccent"; // context + fallback
+  return "borderAccent"; // fallback (context is painted clay, see paintClay)
+}
+// Claude Code's signature "clay" accent (#d97757 = rgb 217,119,87) — the exact
+// color Claude Code CLI paints its context meter. Emitted as truecolor;
+// downgradeAnsi() steps it down for 256/16-color terminals.
+function paintClay(text: string, bold = false): string {
+  return `\u001b[${bold ? "1;" : ""}38;2;217;119;87m${text}\u001b[0m`;
 }
 function gaugeBar(t: any, label: string, usedPct: number): string {
   const used = Math.max(0, Math.min(100, Math.round(usedPct)));
-  const col = gaugeColor(label, used);
   const filled = Math.floor((used * 10) / 100);
-  return t.bold(t.fg(col, "▓".repeat(filled))) + t.fg("dim", "░".repeat(10 - filled));
+  const on = (label === "ctx" && used < GAUGE_CRIT)
+    ? paintClay("▓".repeat(filled), true)
+    : t.bold(t.fg(gaugeColor(label, used), "▓".repeat(filled)));
+  return on + t.fg("dim", "░".repeat(10 - filled));
 }
 function fmtTokens(n: number): string {
   if (n < 1000) return `${n}`;
@@ -394,16 +403,13 @@ function renderLine(
   // chip renders for every provider so the active provider is always visible.
   const activeProvider = quota.provider ?? (() => { try { return ctx.model?.provider; } catch { return undefined; } })();
   // ⚡provider chip stays by the model; the 5h/7d gauges move down next to the context gauge.
-  let quotaGauges = "";
-  if (quota.chips.length > 0) {
-    quotaGauges = quota.chips.map((c) => {
-      const used = Math.max(0, Math.min(100, Math.round(100 - c.remainPct)));
-      const col = gaugeColor(c.label, used);
-      // "31m/5h 35% ▓▓▓░░░░░░░" — reset㏴ 앞으로, 괄호 없이.
-      const reset = c.resetsAt ? t.fg("dim", `${fmtReset(c.resetsAt)}/`) : "";
-      return reset + t.fg("dim", `${c.label} `) + t.bold(t.fg(col, `${used}%`)) + " " + gaugeBar(t, c.label, used);
-    }).join(t.fg("dim", " "));
-  }
+  const quotaChips: string[] = quota.chips.map((c) => {
+    const used = Math.max(0, Math.min(100, Math.round(100 - c.remainPct)));
+    const col = gaugeColor(c.label, used);
+    // context 게이지와 같은 [퍼센트 게이지 숫자] 패턴 → "2% ░░░░░░░░░░ 5h·4h".
+    const tail = c.resetsAt ? `${c.label}·${fmtReset(c.resetsAt)}` : c.label;
+    return t.bold(t.fg(col, `${used}%`)) + " " + gaugeBar(t, c.label, used) + t.fg("dim", ` ${tail}`);
+  });
   if (activeProvider) parts.push(t.fg("accent", `⚡${providerLabel(activeProvider)}`));
   // path
   try {
@@ -416,14 +422,14 @@ function renderLine(
     if (g.branch) parts.push(t.fg("accent", g.branch) + " " + (g.dirty ? t.fg("error", "✗") : t.fg("success", "✓")));
   } catch { /* ignore */ }
   parts.push(SPLIT_MARK);
-  // context (cyan, bold; red when critical)
+  // context (Claude clay #d97757, bold; red when critical)
   if (ctxWin > 0 && ctxPct >= 0) {
-    const col = gaugeColor("ctx", ctxPct);
     // 창 대비 사용량 하나를 두 번 말하지 않는다(백분율 + 게이지 + "남은 토큰") → "24% ▓▓░░ 236k/1M"
-    parts.push(t.bold(t.fg(col, `${ctxPct}%`)) + " " + gaugeBar(t, "ctx", ctxPct) + t.fg("dim", ` ${fmtTokens(ctxCur)}/`) + t.fg("accent", fmtWin(ctxWin)));
+    const pct = ctxPct >= GAUGE_CRIT ? t.bold(t.fg("error", `${ctxPct}%`)) : paintClay(`${ctxPct}%`, true);
+    parts.push(pct + " " + gaugeBar(t, "ctx", ctxPct) + t.fg("dim", ` ${fmtTokens(ctxCur)}/`) + t.fg("accent", fmtWin(ctxWin)));
   }
-  // 5h/7d quota gauges — placed right next to the context gauge.
-  if (quotaGauges) parts.push(quotaGauges);
+  // 5h/7d quota gauges — each its own part so the │ separator sits between them.
+  for (const q of quotaChips) parts.push(q);
   // cost
   if (stats.cost > 0) parts.push(t.fg("dim", `$${stats.cost.toFixed(2)}`));
   // tokens
