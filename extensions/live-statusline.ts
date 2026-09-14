@@ -403,7 +403,7 @@ function renderLine(
   // 캐시 히트율은 R 에 접미어로(별도 조각은 좁은 판에서 잘린다). 색이 판정이다:
   // 85%↑ success · 60%↑ warning · 아래 error = 브리핑·도구블록·TTL 규칙 중 하나를 어기고 있다.
   const rTone = cacheTone(cacheRatio(stats));
-  const rw = cacheReadSuffix(stats, rTone);
+  const rw = cacheReadSuffix(stats);
   // 색 배치(주제 무관 16색, bad 만 bold): 85%↑ 초록 · 60%↑ 노랑+! · 아래 빨강+!!(+W↑)
   // 테마 경유가 필요하면 /live-status cache theme — dark 의 success(#b5bd68) 는 text 와 구별이 안 된다.
   const cacheMode = ((globalThis as any)[CACHE_COLOR_MODE_KEY] ?? "literal") === "theme" ? "theme" : "literal";

@@ -39,17 +39,16 @@ export function cacheLabel(s: CacheStats): string | null {
 
 /**
  * 좁은 판에서는 별도 조각이 잘린다(트럭에이션은 뒤부터 먹는다). 그래서 비율을 R 토큰에
- * 접미어로 붙인다: " 89%" / " 28%!!(W↑)".
+ * 접미어로 붙인다: " 89%" / " 28%(W↑)".
  * ⚠ 판정을 **색에만 싣지 않는다** — truecolor 가 삼켜지면(herdr/TERM) 전부 일반 텍스트로 보인다.
  *   warn = ! , bad = !! , write 우세 = (W↑)  → 색이 없어도 같은 문장이 읽힌다.
  */
-export function cacheReadSuffix(s: CacheStats, tone?: Tone): string {
+export function cacheReadSuffix(s: CacheStats): string {
 	const r = cacheRatio(s);
 	if (r == null || s.cacheRead + s.cacheWrite === 0) return "";
-	const t = tone ?? cacheTone(r);
-	const mark = t === "bad" ? "!!" : t === "warn" ? "!" : "";
-	// 구분자는 점이 아니라 공백(점 자체도 노이즈다): "R272.2M 89%"
-	return ` ${Math.round(r * 100)}%${mark}` + (s.cacheWrite > s.cacheRead ? "(W↑)" : "");
+	// 구분자는 점이 아니라 공백(점도 노이즈다) · ! / !! 강조 기호는 **없앤다** — 판정은 색이 이미 말하고,
+	// 두 번 말하는 표시는 노이즈다(사용자 관측). (W↑) 는 남긴다: 이건 강조가 아니라 read<write 라는 별개의 사실이다.
+	return ` ${Math.round(r * 100)}%` + (s.cacheWrite > s.cacheRead ? "(W↑)" : "");
 }
 
 /**
