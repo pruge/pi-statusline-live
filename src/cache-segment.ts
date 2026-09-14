@@ -107,3 +107,21 @@ export function cachePaint(tone: Tone, mode: "literal" | "theme" = "literal", th
 	const code = tone === "good" ? (goodCode ?? CACHE_LITERAL.good) : tone === "warn" ? CACHE_LITERAL.warn : CACHE_LITERAL.bad;
 	return { kind: "literal", code, bold };
 }
+
+/** 1k/1M 으로 줄인다(푸터 폭은 귀하다). */
+export function fmtK(n: number): string {
+	const v = Math.max(0, Math.round(n || 0));
+	if (v < 1000) return String(v);
+	if (v < 1_000_000) return `${Math.round(v / 1000)}k`;
+	return `${(v / 1_000_000).toFixed(1)}M`;
+}
+
+/**
+ * 읽기량을 **턴당 평균**으로 말한다. 누적 cacheRead 은 턴이 늘면 무조건 늘어서(≈ 컨텍스트 크기 × 턴 수)
+ * 세션 간 비교가 안 되는 숫자가 된다 — "지금 얼마짜리 앞부분을 매 턴 다시 읽는가"가 쓸 만한 수다.
+ * (누적 총합이 필요하면 pi-ticketflow 의 cache-report 가 그걸 위한 도구다.)
+ */
+export function cacheReadLabel(s: { cacheRead?: number; turns?: number }): string {
+	const turns = Math.max(1, s.turns ?? 1);
+	return `R${fmtK((s.cacheRead ?? 0) / turns)}/턴`;
+}

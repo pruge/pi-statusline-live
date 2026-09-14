@@ -31,7 +31,14 @@ assert.equal(colorForTone(colored, "bad"), "error");
 assert.equal(colorForTone(colorless, "good"), null, "테마가 무색이면 null — 부르는 쪽이 bold 로 대체한다");
 const partial = { fg: (n, s) => (n === "accent" ? `\u001b[36m${s}\u001b[0m` : s) };
 assert.equal(colorForTone(partial, "good"), "accent", "success 가 없으면 같은 판정의 다른 색으로 갈아탄다");
-console.log("  ✓ cache-segment 표시·색·강등·접기 총 48 케이스");
+// 턴당 읽기 라벨 — 누적 cacheRead 은 턴 수에 비례해서 커지므로(≈ 컨텍스트 × 턴) 세션 비교가 안 된다.
+const { cacheReadLabel, fmtK } = await import("./cache-segment.ts");
+assert.equal(fmtK(2_855_600), "2.9M");
+assert.equal(fmtK(60_800), "61k");
+assert.equal(cacheReadLabel({ cacheRead: 2_855_600, turns: 47 }), "R61k/턴");
+assert.equal(cacheReadLabel({ cacheRead: 0, turns: 0 }), "R0/턴", "0으로 나누지 않는다");
+assert.equal(cacheReadLabel({ cacheRead: 25_000, turns: 2 }), "R13k/턴");
+
 // ANSI 강등 — truecolor 를 삼키는 터미널에서도 판정이 살아야 한다
 const { detectColorMode, downgradeAnsi } = await import("./ansi.ts");
 const dark = { success: "\u001b[38;2;181;189;104m", warning: "\u001b[38;2;255;255;0m", error: "\u001b[38;2;204;102;102m", dim: "\u001b[38;2;102;102;102m" };
@@ -74,4 +81,4 @@ assert.deepEqual(foldLines([M, "C"], " | ", M, 80, tr), ["C"], "앞줄이 비면
 assert.equal(foldLines(["AAAAAAAAAAAAAAAAAAAA", M, "B"], " | ", M, 12, tr)[0], "AAAAAAAAAAA…", "앞줄만 12컬럼으로");
 assert.equal(foldLines(["AAAAAAAAAAAAAAAAAAAA", M, "BBBBBBBBBBBBBBBBBBBB"], " | ", M, 12, tr)[1], "BBBBBBBBBBB…", "뒷줄도 따로");
 assert.equal(foldLines(["AAAAAAAAAA", M, "B"], " | ", M, 5, tr)[0], "AAAAAAAAAA", "하한 10 덕분에 10자는 남는다");
-
+console.log("  ✓ cache-segment 표시·색·강등·접기·턴당읽기 총 53 케이스");

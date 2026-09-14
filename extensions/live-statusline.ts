@@ -14,7 +14,7 @@
  * model_select / session_start). No dependency on either package — standalone.
  */
 
-import { cacheRatio, cacheReadSuffix, cacheTone, cachePaint, colorForTone, GOOD_OPTIONS } from "../src/cache-segment.ts";
+import { cacheRatio, cacheReadLabel, cacheReadSuffix, cacheTone, cachePaint, colorForTone, GOOD_OPTIONS } from "../src/cache-segment.ts";
 import { detectColorMode, downgradeAnsi, foldLines, paintLiteral } from "../src/ansi.ts";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
@@ -167,12 +167,13 @@ function getGit(cwd: string) {
 
 // ── session stats (wierd-style gatherStats) ──
 function gatherStats(ctx: ExtensionContext) {
-  let cost = 0, input = 0, output = 0, cacheRead = 0, cacheWrite = 0;
+  let cost = 0, input = 0, output = 0, cacheRead = 0, cacheWrite = 0, turns = 0;
   try {
     for (const e of ctx.sessionManager.getBranch()) {
       if ((e as any).type === "message" && (e as any).message?.role === "assistant") {
         const u = (e as any).message.usage;
         if (!u) continue;
+        turns++;
         cost += u.cost?.total ?? 0;
         input += u.input ?? 0;
         output += u.output ?? 0;
@@ -181,7 +182,7 @@ function gatherStats(ctx: ExtensionContext) {
       }
     }
   } catch { /* session not ready */ }
-  return { cost, input, output, cacheRead, cacheWrite };
+  return { cost, input, output, cacheRead, cacheWrite, turns };
 }
 
 // ── auth resolution ──
@@ -414,7 +415,7 @@ function renderLine(
   if (tok.length) seg.push(t.fg("dim", tok.join(" ")));
   // 색은 **비율에만** 입힌다. `R272.2M` 은 크기일 뿐(매 턴 커지는 수)이라 그것까지 칠리면
   // 줄 전체가 시안/노랑/빨강로 시끄러워져 판정이 한 조각에서 읽히지 않는다.
-  const rQuiet = `R${fmtTokens(stats.cacheRead || 0)}`;
+  const rQuiet = cacheReadLabel(stats as { cacheRead?: number; turns?: number });
   if (rw) {
     // 한 조각으로 push 한다: seg 는 " " 로 join 되므로 따로 넣으면 "R272.2M ·89%" 가 된다.
     const hot = paint.kind === "literal" ? paintLiteral(paint.code, rw, paint.bold) : paint.kind === "theme" ? (paint.bold ? t.bold(t.fg(paint.name, rw)) : t.fg(paint.name, rw)) : t.fg("dim", rw);
