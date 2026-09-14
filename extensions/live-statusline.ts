@@ -40,29 +40,44 @@ type QuotaState = {
   provider?: string;
 };
 
-// ── gauges: fixed identity colors (strong + distinct), red when critical ──
-// context → Claude Code's clay #d97757 (matches the CLI's own context meter),
-// 5h → yellow (warning), 7d → green (success).
-// % numbers share the bar color; any gauge >= 90% flips to error (red).
+// ── gauges: Claude Code's own colors, red when critical ──
+// context → clay #d97757 (the CLI's context meter); 5h/7d → light blue #6da7ec
+// (the CLI's usage/limit bars). % numbers share the bar color; >= 90% → red.
 const GAUGE_CRIT = 90;
 type GaugeColor = "borderAccent" | "warning" | "success" | "error";
 function gaugeColor(label: string, used: number): GaugeColor {
   if (used >= GAUGE_CRIT) return "error";
   if (label === "5h") return "warning";
   if (label === "7d") return "success";
-  return "borderAccent"; // fallback (context is painted clay, see paintClay)
+  return "borderAccent"; // fallback (real colors come from gaugeTC/truecolor)
 }
-// Claude Code's signature "clay" accent (#d97757 = rgb 217,119,87) — the exact
-// color Claude Code CLI paints its context meter. Emitted as truecolor;
-// downgradeAnsi() steps it down for 256/16-color terminals.
-function paintClay(text: string, bold = false): string {
-  return `\u001b[${bold ? "1;" : ""}38;2;217;119;87m${text}\u001b[0m`;
+// Claude Code truecolor accents, emitted raw so downgradeAnsi() can step them
+// down for 256/16-color terminals: clay #d97757 (context meter) and the CLI's
+// usage/limit light blue #6da7ec.
+const TC_CLAY = "38;2;217;119;87";
+const TC_SKY = "38;2;109;167;236";
+function paintTC(seq: string, text: string, bold = false): string {
+  return `\u001b[${bold ? "1;" : ""}${seq}m${text}\u001b[0m`;
+}
+// Truecolor sequence for a gauge, or null when the theme color should be used
+// (>= 90% critical → red via gaugeColor).
+function gaugeTC(label: string, used: number): string | null {
+  if (used >= GAUGE_CRIT) return null;
+  if (label === "ctx") return TC_CLAY;
+  if (label === "5h" || label === "7d") return TC_SKY;
+  return null;
+}
+// The colored "NN%" number for a gauge.
+function gaugePct(t: any, label: string, used: number): string {
+  const seq = gaugeTC(label, used);
+  return seq ? paintTC(seq, `${used}%`, true) : t.bold(t.fg(gaugeColor(label, used), `${used}%`));
 }
 function gaugeBar(t: any, label: string, usedPct: number): string {
   const used = Math.max(0, Math.min(100, Math.round(usedPct)));
   const filled = Math.floor((used * 10) / 100);
-  const on = (label === "ctx" && used < GAUGE_CRIT)
-    ? paintClay("▓".repeat(filled), true)
+  const seq = gaugeTC(label, used);
+  const on = seq
+    ? paintTC(seq, "▓".repeat(filled), true)
     : t.bold(t.fg(gaugeColor(label, used), "▓".repeat(filled)));
   return on + t.fg("dim", "░".repeat(10 - filled));
 }
@@ -407,10 +422,9 @@ function renderLine(
   // ⚡provider chip stays by the model; the 5h/7d gauges move down next to the context gauge.
   const quotaChips: string[] = quota.chips.map((c) => {
     const used = Math.max(0, Math.min(100, Math.round(100 - c.remainPct)));
-    const col = gaugeColor(c.label, used);
-    // 5h/7d 라벨은 빼고 리셋까지 시간만 → "2% ░░░░░░░░░░ 4d 2h" (색으로 5h·노랑 / 7d·초록 구뱄).
+    // 5h/7d 라벨은 빼고 리셋까지 시간만 → "2% ░░░░░░░░░░ 4d 2h" (둘 다 Claude 사용량 옆파랑).
     const tail = fmtReset(c.resetsAt);
-    return t.bold(t.fg(col, `${used}%`)) + " " + gaugeBar(t, c.label, used) + (tail ? t.fg("dim", ` ${tail}`) : "");
+    return gaugePct(t, c.label, used) + " " + gaugeBar(t, c.label, used) + (tail ? t.fg("dim", ` ${tail}`) : "");
   });
   if (activeProvider) parts.push(t.fg("accent", `⚡${providerLabel(activeProvider)}`));
   // path
@@ -427,8 +441,7 @@ function renderLine(
   // context (Claude clay #d97757, bold; red when critical)
   if (ctxWin > 0 && ctxPct >= 0) {
     // 창 대비 사용량 하나를 두 번 말하지 않는다(백분율 + 게이지 + "남은 토큰") → "24% ▓▓░░ 236k/1M"
-    const pct = ctxPct >= GAUGE_CRIT ? t.bold(t.fg("error", `${ctxPct}%`)) : paintClay(`${ctxPct}%`, true);
-    parts.push(pct + " " + gaugeBar(t, "ctx", ctxPct) + t.fg("dim", ` ${fmtTokens(ctxCur)}/`) + t.fg("accent", fmtWin(ctxWin)));
+    parts.push(gaugePct(t, "ctx", ctxPct) + " " + gaugeBar(t, "ctx", ctxPct) + t.fg("dim", ` ${fmtTokens(ctxCur)}/`) + t.fg("accent", fmtWin(ctxWin)));
   }
   // 5h/7d quota gauges — each its own part so the │ separator sits between them.
   for (const q of quotaChips) parts.push(q);
