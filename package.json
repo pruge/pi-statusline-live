@@ -25,7 +25,8 @@
   "pi": {
     "extensions": [
       "./extensions/live-statusline.ts"
-    ]
+    ],
+    "skills": ["./skills"]
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
