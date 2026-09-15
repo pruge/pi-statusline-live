@@ -61,6 +61,16 @@ pi -e github.com/pruge/pi-statusline-live
 /live-status on|off   — toggle custom footer (off = native footer back)
 ```
 
+## Ctx registry (for orchestrators)
+
+Every session running this extension snapshots its context to a shared file:
+
+- dir: `~/.pi/agent/ctx-sessions/`, file `<HERDR_PANE_ID ?? PI_SESSION_ID ?? pid>.json`
+- shape: `{ v:1, pane?, session?, cwd, model?, provider?, pct, cur, win, at }`
+- written on `turn_end` / `model_select` / every 60s tick; stale entries (30min) pruned on write; own file removed on `session_shutdown`
+
+`pi-ticketflow` reads it (`tf_status` worker detail, idle-watch lines), matching workers by pane (`workerPane`) then worktree cwd. File boundary, no imports — see `src/ctx-snapshot.ts`.
+
 ## Credentials
 
 No extra setup — reads what pi already has:

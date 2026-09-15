@@ -1,6 +1,6 @@
 {
   "name": "pi-statusline-live",
-  "version": "0.2.16",
+  "version": "0.2.17",
   "description": "Realtime pi statusline: wierdbytes-style footer (model/path/git/context/cost/tokens) + live Anthropic 5h/7d, Codex 5h/7d, OpenCode Go quotas",
   "type": "module",
   "license": "MIT",
@@ -41,6 +41,6 @@
   },
   "scripts": {
     "check": "npx --yes esbuild extensions/*.ts --outdir=/tmp/pi-statusline-check --log-level=warning",
-    "test": "node src/cache-segment.test.mjs"
+    "test": "node src/cache-segment.test.mjs && node src/ctx-snapshot.test.mjs"
   }
 }

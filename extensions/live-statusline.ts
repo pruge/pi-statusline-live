@@ -18,11 +18,12 @@
  */
 
 import { cacheRatio, cacheReadLabel, cacheReadSuffix, cacheTone, cachePaint, colorForTone, GOOD_OPTIONS } from "../src/cache-segment.ts";
+import { CTX_TTL_MS, snapshotKey, staleNames, type CtxEntry } from "../src/ctx-snapshot.ts";
 import { detectColorMode, downgradeAnsi, foldLines, paintLiteral } from "../src/ansi.ts";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 
@@ -401,6 +402,50 @@ async function fetchOpenCodeGo(ctx?: ExtensionContext): Promise<QuotaChip[]> {
   return out;
 }
 
+// ── ctx snapshot: 중앙 레지스트리 ~/.pi/agent/ctx-sessions/<pane|session|pid>.json ──
+// orch(tf_status·idle 워치)가 읽는다. 쓰기: turn_end·model_select·60s tick. prune: 쓸 때마다
+// TTL(30분) 밖 정리, 끝날 때 자기 파일 삭제. tmp+rename 원자 쓰기, 전부 best-effort(푸터를 못 깨운다).
+function writeCtxSnapshot(ctx: ExtensionContext) {
+  try {
+    let win = 0, cur = 0;
+    try {
+      const u = ctx.getContextUsage();
+      win = u?.contextWindow ?? (ctx as any)?.model?.contextWindow ?? 0;
+      cur = u?.tokens ?? 0;
+    } catch { return; }
+    if (!(win > 0)) return;
+    const dir = join(homedir(), ".pi", "agent", "ctx-sessions");
+    mkdirSync(dir, { recursive: true });
+    const entry: CtxEntry = {
+      v: 1,
+      pane: process.env.HERDR_PANE_ID || undefined,
+      session: process.env.PI_SESSION_ID || undefined,
+      cwd: (() => { try { return ctx.cwd; } catch { return process.cwd(); } })(),
+      model: (() => { try { return shortenModel((ctx as any)?.model); } catch { return undefined; } })(),
+      provider: (() => { try { const p = (ctx as any)?.model?.provider; return typeof p === "string" ? p : undefined; } catch { return undefined; } })(),
+      pct: Math.floor((cur * 100) / win), cur, win, at: new Date().toISOString(),
+    };
+    const file = join(dir, `${snapshotKey()}.json`);
+    const tmp = `${file}.tmp-${process.pid}`;
+    writeFileSync(tmp, JSON.stringify(entry));
+    renameSync(tmp, file);
+    try {
+      const withAt = readdirSync(dir)
+        .filter((f) => f.endsWith(".json") && !f.includes(".tmp-"))
+        .map((f) => {
+          try { return { name: f, at: (JSON.parse(readFileSync(join(dir, f), "utf8")) as any)?.at }; }
+          catch { return { name: f, at: undefined }; }
+        });
+      for (const n of staleNames(withAt, Date.now(), CTX_TTL_MS)) {
+        try { rmSync(join(dir, n), { force: true }); } catch { /* 다음 기회에 */ }
+      }
+    } catch { /* prune 실패는 다음 기회에 */ }
+  } catch { /* 스냅샷은 푸터를 절대 깨지 않는다 */ }
+}
+function removeCtxSnapshot() {
+  try { rmSync(join(homedir(), ".pi", "agent", "ctx-sessions", `${snapshotKey()}.json`), { force: true }); } catch { /* ignore */ }
+}
+
 // per-provider cache (anthropic 5min, others 60s)
 const quotaCache = new Map<string, QuotaState>();
 const TTL: Record<string, number> = { anthropic: 5 * 60_000, "claude-bridge": 5 * 60_000, "openai-codex": 60_000, "opencode-go": 60_000 };
@@ -626,7 +671,7 @@ export default function (pi: ExtensionAPI) {
 
   function startTimers() {
     if (!timer) {
-      timer = setInterval(() => void update(false), REFRESH_MS);
+      timer = setInterval(() => { void update(false); if (currentCtx) writeCtxSnapshot(currentCtx); }, REFRESH_MS);
       (timer as any)?.unref?.();
     }
     if (!spinTimer) {
@@ -670,16 +715,19 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("turn_end", async (_e, ctx) => {
     currentCtx = ctx;
+    writeCtxSnapshot(ctx);
     void update(false);
   });
 
   pi.on("model_select", async (_e, ctx) => {
     currentCtx = ctx;
     syncThinkLevel(ctx);
+    writeCtxSnapshot(ctx);
     void update(true);
   });
 
   pi.on("session_shutdown", async () => {
+    removeCtxSnapshot();
     stopTimers();
     setPhase("idle");
     currentCtx = undefined;
