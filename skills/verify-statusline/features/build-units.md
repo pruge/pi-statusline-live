@@ -7,6 +7,7 @@ The extension must compile warning-free and the pure segments must hold their re
 - `npm run check` bundles `extensions/*.ts` with zero warnings.
 - `cache-segment` 53 cases (display, color, downgrade, fold, per-turn read).
 - `ctx-snapshot` 3 cases (key priority, sanitize, prune selection).
+- `quota-windows` 5 cases (실측 Codex payload, 남은-비율 변형, 창 없음, 범위 클램프, toMs).
 
 ## How to get to it (user POV)
 
@@ -17,7 +18,7 @@ The extension must compile warning-free and the pure segments must hold their re
 Preconditions: baseline.
 
 - **Build.** Run `npm run check`. Require no output past the npm notice lines.
-- **Units.** Run `npm test`. Require `pass 56 fail 0` (53 + 3).
+- **Units.** Run `npm test`. Require `pass 61 fail 0` (53 + 3 + 5).
 - **Proof.** The transcript lines.
 
 ## Gotchas
