@@ -458,7 +458,8 @@ async function refreshQuotas(ctx: ExtensionContext, force = false): Promise<Quot
     } else if (provider === "openai-codex") {
       const { token, accountId } = await codexCreds(ctx);
       state.chips = await fetchCodex(token, accountId);
-      if (state.chips.length === 0) state.error = "no-creds";
+      // 자격증명이 있는데 창이 비면 이유는 파싱이다 — 'no-creds' 로 묶으면 진단이 한 단계 멈춘다.
+      if (state.chips.length === 0) state.error = token && accountId ? "no-usage" : "no-creds";
     } else if (provider === "opencode" || provider === "opencode-go") {
       state.chips = await fetchOpenCodeGo(ctx);
       if (state.chips.length === 0) state.error = "no-go-config";

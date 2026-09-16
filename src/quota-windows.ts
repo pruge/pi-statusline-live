@@ -14,6 +14,15 @@ export interface QuotaWindow {
 	resetsAt: number;
 }
 
+/** 창 하나에서 남은 퍼센트를 읽는다. 서버마다 이름이 다르고, used_percent 는 뒤집어야 한다. */
+function remainPctOf(w: any): number | null {
+	if (!w) return null;
+	if (w.percent_left != null) return Number(w.percent_left);
+	if (w.remaining_percent != null) return Number(w.remaining_percent);
+	if (w.used_percent != null) return 100 - Number(w.used_percent);
+	return null;
+}
+
 /** 초/밀리초 혼용 타임스탬프를 ms 로. 1e11 초과는 이미 ms 로 본다. */
 export function toMs(v: unknown): number {
 	if (typeof v === "number") return v > 1e11 ? v : v * 1000;
@@ -25,10 +34,12 @@ export function toMs(v: unknown): number {
 export function codexWindows(payload: unknown): QuotaWindow[] {
 	const rl = ((payload as any)?.rate_limit ?? (payload as any)?.rate_limits ?? {}) as any;
 	const out: QuotaWindow[] = [];
-	const pct = (l: any) => l?.percent_left != null ? Number(l.percent_left) : l?.remaining_percent != null ? Number(l.remaining_percent) : null;
-	const prim = rl.primary_window ?? rl.primary ?? rl.five_hour;
-	const sec = rl.secondary_window ?? rl.secondary ?? rl.weekly;
-	if (prim && pct(prim) != null) out.push({ label: "5h", remainPct: Math.max(0, pct(prim)!), resetsAt: toMs(prim.reset_at ?? prim.reset_time_ms) });
-	if (sec && pct(sec) != null) out.push({ label: "7d", remainPct: Math.max(0, pct(sec)!), resetsAt: toMs(sec.reset_at ?? sec.reset_time_ms) });
+	const add = (label: QuotaWindow["label"], w: any) => {
+		const remain = remainPctOf(w);
+		if (remain == null || !Number.isFinite(remain)) return;
+		out.push({ label, remainPct: Math.max(0, Math.min(100, remain)), resetsAt: toMs(w.reset_at ?? w.reset_time_ms) });
+	};
+	add("5h", rl.primary_window ?? rl.primary ?? rl.five_hour);
+	add("7d", rl.secondary_window ?? rl.secondary ?? rl.weekly);
 	return out;
 }
