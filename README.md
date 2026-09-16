@@ -49,8 +49,8 @@ pi -e github.com/pruge/pi-statusline-live
 | `context` | `% + bar` vs model context window |
 | `cost` | session USD |
 | `tokens` | `↑in ↓out R W` session totals |
-| `⚡Anthropic 5h 7d` | Anthropic OAuth usage (`api.anthropic.com/api/oauth/usage`), remaining % + reset |
-| `⚡Codex 5h 7d` | OpenAI Codex (`chatgpt.com/backend-api/wham/usage`) |
+| `⚡Anthropic 5h 7d` | Anthropic OAuth usage (`api.anthropic.com/api/oauth/usage`), used % + reset |
+| `⚡Codex 5h 7d` | OpenAI Codex (`chatgpt.com/backend-api/wham/usage`), `rate_limit` 의 5h/7d 창, used % + reset |
 | `⚡OpenCode Go 5h 7d` | OpenCode Go API key (`/zen/go/v1/usage`; dashboard scrape as fallback) |
 
 ## Commands
