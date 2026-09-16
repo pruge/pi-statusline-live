@@ -18,6 +18,7 @@
  */
 
 import { cacheRatio, cacheReadLabel, cacheReadSuffix, cacheTone, cachePaint, colorForTone, GOOD_OPTIONS } from "../src/cache-segment.ts";
+import { codexWindows, toMs } from "../src/quota-windows.ts";
 import { CTX_TTL_MS, snapshotKey, staleNames, type CtxEntry } from "../src/ctx-snapshot.ts";
 import { detectColorMode, downgradeAnsi, foldLines, paintLiteral } from "../src/ansi.ts";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -324,11 +325,6 @@ async function fetchJson(url: string, headers: Record<string, string>, signal?: 
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
 }
-function toMs(v: unknown): number {
-  if (typeof v === "number") return v > 1e11 ? v : v * 1000;
-  if (typeof v === "string") return new Date(v).getTime();
-  return 0;
-}
 async function fetchAnthropic(token?: string): Promise<QuotaChip[]> {
   if (!token || token.startsWith("sk-ant-api")) return [];
   const d: any = await fetchJson("https://api.anthropic.com/api/oauth/usage",
@@ -342,14 +338,7 @@ async function fetchCodex(token?: string, accountId?: string): Promise<QuotaChip
   if (!token || !accountId) return [];
   const d: any = await fetchJson("https://chatgpt.com/backend-api/wham/usage",
     { Authorization: `Bearer ${token}`, "ChatGPT-Account-Id": accountId, Accept: "application/json", Origin: "https://chatgpt.com", Referer: "https://chatgpt.com/", "User-Agent": "Mozilla/5.0" });
-  const rl = d?.rate_limit ?? d?.rate_limits ?? {};
-  const out: QuotaChip[] = [];
-  const pct = (l: any) => l?.percent_left != null ? Number(l.percent_left) : l?.remaining_percent != null ? Number(l.remaining_percent) : null;
-  const prim = rl.primary_window ?? rl.primary ?? rl.five_hour;
-  const sec = rl.secondary_window ?? rl.secondary ?? rl.weekly;
-  if (prim && pct(prim) != null) out.push({ label: "5h", remainPct: Math.max(0, pct(prim)!), resetsAt: toMs(prim.reset_at ?? prim.reset_time_ms) });
-  if (sec && pct(sec) != null) out.push({ label: "7d", remainPct: Math.max(0, pct(sec)!), resetsAt: toMs(sec.reset_at ?? sec.reset_time_ms) });
-  return out;
+  return codexWindows(d);
 }
 // OpenCode Go 5h/7d — 1순위: API 키(推論와 같은 키)로 https://opencode.ai/zen/go/v1/usage 조회.
 // 응답: { usage: { rolling: { percent(사용량), resetsAt }, weekly: {...}, monthly: {...} } }.
