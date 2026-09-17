@@ -24,7 +24,7 @@ ls extensions/live-statusline.ts src/cache-segment.ts src/ctx-snapshot.ts
 
 ```bash
 npm run check  # esbuild, no warnings
-npm test       # cache-segment 53 + ctx-snapshot 3
+npm test       # cache-segment 53 + ctx-snapshot 3 + quota-windows 8
 ```
 
 Then the contract checks (commands, not eyeballing):
@@ -40,7 +40,7 @@ Manual only: footer rendering and gauge colors inside pi (`/live-status refresh`
 
 ## Evidence
 
-Proof is the terminal transcript: clean `check`, `tests 56 pass 0 fail`, the snapshot key + TTL line, and (if run) a 200 with `rolling/weekly/monthly`. Keep it in `artifacts/verify-statusline/<run>.log` via tee.
+Proof is the terminal transcript: clean `check`, `tests 64 pass 0 fail`, the snapshot key + TTL line, and (if run) a 200 with `rolling/weekly/monthly` all three landing as `5h`/`7d`/`30d` gauges. Keep it in `artifacts/verify-statusline/<run>.log` via tee.
 
 ## Cleanup
 

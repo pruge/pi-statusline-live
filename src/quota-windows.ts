@@ -9,7 +9,7 @@
  */
 
 export interface QuotaWindow {
-	label: "5h" | "7d";
+	label: "5h" | "7d" | "30d";
 	remainPct: number;
 	resetsAt: number;
 }
@@ -41,5 +41,22 @@ export function codexWindows(payload: unknown): QuotaWindow[] {
 	};
 	add("5h", rl.primary_window ?? rl.primary ?? rl.five_hour);
 	add("7d", rl.secondary_window ?? rl.secondary ?? rl.weekly);
+	return out;
+}
+
+/**
+ * opencode.ai/zen/go/v1/usage 의 usage 창 — OpenCode Go 5h/7d/30d(monthly).
+ * 이 엔드포인트는 `percent` 를 **사용률**로 보낸다(다른 둘과 반대) — 여기서 뒤집는다.
+ */
+export function opencodeWindows(payload: unknown): QuotaWindow[] {
+	const u = (((payload as any)?.usage ?? payload) ?? {}) as any;
+	const out: QuotaWindow[] = [];
+	const add = (label: QuotaWindow["label"], w: any) => {
+		if (!w || typeof w.percent !== "number" || !Number.isFinite(w.percent)) return;
+		out.push({ label, remainPct: Math.max(0, Math.min(100, 100 - w.percent)), resetsAt: toMs(w.resetsAt ?? w.resets_at) });
+	};
+	add("5h", u.rolling);
+	add("7d", u.weekly);
+	add("30d", u.monthly);
 	return out;
 }

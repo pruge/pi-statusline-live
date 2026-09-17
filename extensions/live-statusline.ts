@@ -3,8 +3,9 @@
  *
  * Mix of:
  *  - @wierdbytes/pi-statusline (base UI: model / path / git / context / cost / tokens)
- *  - @latentminds/pi-quotas (realtime quota fetch: Anthropic 5h/7d, Codex 5h/7d, OpenCode Go 5h/weekly)
+ *  - @latentminds/pi-quotas (realtime quota fetch: Anthropic 5h/7d, Codex 5h/7d, OpenCode Go 5h/7d/monthly)
  *
+ * 0.2.18: OpenCode Go 월간(monthly) 게이지 추가 — 5h/7d 옆에 30d 로 붙는다.
  * 0.2.16: OpenCode Go 5h/7d 를 API 키로 조회(https://opencode.ai/zen/go/v1/usage).
  * 대시보드 스크랩(workspaceId + authCookie)은 폴백으로 유지 — 별도 설정 없이 pi auth 의
  * opencode-go/opencode 키(OPENCODE_API_KEY)만으로 게이지가 뜬다.
@@ -18,7 +19,7 @@
  */
 
 import { cacheRatio, cacheReadLabel, cacheReadSuffix, cacheTone, cachePaint, colorForTone, GOOD_OPTIONS } from "../src/cache-segment.ts";
-import { codexWindows, toMs } from "../src/quota-windows.ts";
+import { codexWindows, opencodeWindows, toMs } from "../src/quota-windows.ts";
 import { CTX_TTL_MS, snapshotKey, staleNames, type CtxEntry } from "../src/ctx-snapshot.ts";
 import { detectColorMode, downgradeAnsi, foldLines, paintLiteral } from "../src/ansi.ts";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -54,7 +55,7 @@ const GAUGE_WARN = 60;
 type GaugeColor = "borderAccent" | "warning" | "success" | "error";
 function gaugeColor(label: string, used: number): GaugeColor {
   if (used >= GAUGE_CRIT) return "error";
-  if (label === "5h") return "warning";
+  if (label === "5h" || label === "30d") return "warning";
   if (label === "7d") return "success";
   // context + fallback: fullness signal (green → yellow → red at GAUGE_CRIT).
   return used >= GAUGE_WARN ? "warning" : "success";
@@ -62,6 +63,8 @@ function gaugeColor(label: string, used: number): GaugeColor {
 // Claude Code's usage/limit light blue #6da7ec, emitted raw so downgradeAnsi()
 // can step it down for 256/16-color terminals.
 const TC_SKY = "38;2;109;167;236";
+// 창 게이지(5h/7d/30d)는 한 정체성 색을 공유한다 — 색이 종류를 말하고, 숫자가 한도를 말한다.
+const SKY_LABELS = new Set(["5h", "7d", "30d"]);
 function paintTC(seq: string, text: string, bold = false): string {
   return `\u001b[${bold ? "1;" : ""}${seq}m${text}\u001b[0m`;
 }
@@ -69,7 +72,7 @@ function paintTC(seq: string, text: string, bold = false): string {
 // gaugeColor (context fullness signal, and the >= 90% red).
 function gaugeTC(label: string, used: number): string | null {
   if (used >= GAUGE_CRIT) return null;
-  if (label === "5h" || label === "7d") return TC_SKY;
+  if (SKY_LABELS.has(label)) return TC_SKY;
   return null; // context uses the theme fullness color
 }
 // The colored "NN%" number for a gauge.
@@ -340,8 +343,9 @@ async function fetchCodex(token?: string, accountId?: string): Promise<QuotaChip
     { Authorization: `Bearer ${token}`, "ChatGPT-Account-Id": accountId, Accept: "application/json", Origin: "https://chatgpt.com", Referer: "https://chatgpt.com/", "User-Agent": "Mozilla/5.0" });
   return codexWindows(d);
 }
-// OpenCode Go 5h/7d — 1순위: API 키(推論와 같은 키)로 https://opencode.ai/zen/go/v1/usage 조회.
+// OpenCode Go 5h/7d/30d — 1순위: API 키(推論와 같은 키)로 https://opencode.ai/zen/go/v1/usage 조회.
 // 응답: { usage: { rolling: { percent(사용량), resetsAt }, weekly: {...}, monthly: {...} } }.
+// 필드 해석은 src/quota-windows.ts 의 opencodeWindows 한 곳에서만 한다.
 // 2순위: 대시보드 스크랩(workspaceId + authCookie) — API 접근이 안 되는 키용 폴백.
 async function fetchOpenCodeGoApi(apiKey?: string): Promise<QuotaChip[]> {
   if (!apiKey || apiKey.startsWith("!")) return [];
@@ -350,15 +354,7 @@ async function fetchOpenCodeGoApi(apiKey?: string): Promise<QuotaChip[]> {
     d = await fetchJson("https://opencode.ai/zen/go/v1/usage",
       { Authorization: `Bearer ${apiKey}`, Accept: "application/json" });
   } catch { return []; }
-  const u = d?.usage ?? d;
-  const win = (w: any): Omit<QuotaChip, "label"> | null => {
-    if (!w || typeof w.percent !== "number") return null;
-    return { remainPct: Math.max(0, Math.min(100, 100 - w.percent)), resetsAt: toMs(w.resetsAt ?? w.resets_at) };
-  };
-  const out: QuotaChip[] = [];
-  const r = win(u?.rolling); if (r) out.push({ ...r, label: "5h" });
-  const wk = win(u?.weekly); if (wk) out.push({ ...wk, label: "7d" });
-  return out;
+  return opencodeWindows(d);
 }
 async function fetchOpenCodeGo(ctx?: ExtensionContext): Promise<QuotaChip[]> {
   try {
@@ -388,6 +384,8 @@ async function fetchOpenCodeGo(ctx?: ExtensionContext): Promise<QuotaChip[]> {
   if (r) out.push({ label: "5h", remainPct: Math.max(0, 100 - r.pct), resetsAt: Date.now() + Math.max(0, r.resetSec) * 1000 });
   const w = grab("weeklyUsage");
   if (w) out.push({ label: "7d", remainPct: Math.max(0, 100 - w.pct), resetsAt: Date.now() + Math.max(0, w.resetSec) * 1000 });
+  const mo = grab("monthlyUsage");
+  if (mo) out.push({ label: "30d", remainPct: Math.max(0, 100 - mo.pct), resetsAt: Date.now() + Math.max(0, mo.resetSec) * 1000 });
   return out;
 }
 
