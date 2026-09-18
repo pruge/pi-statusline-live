@@ -3,7 +3,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
 	DEFAULT_CAP, DEFAULT_FULL, CTX_CAP_ENTRY, defaultCtxCap, parseCapToken, parseConfig, releasedFromEntries,
-	resolveWindow, describeConfig, fmt,
+	resolveWindow, describeConfig, capChipLabel, fmt,
 } from "./ctx-cap.ts";
 
 test("parseCapToken — k/m 접미사와 소수", () => {
@@ -112,9 +112,21 @@ test("resolveWindow — 창을 모르면(null/0) 그대로", () => {
 });
 
 test("describeConfig / fmt — 세션 상태가 한 줄에 드러난다", () => {
-	assert.match(describeConfig(defaultCtxCap(), false), /캡 272k/);
-	assert.match(describeConfig(defaultCtxCap(), true), /해제\(이 세션\)/);
+	assert.match(describeConfig(defaultCtxCap(), false), /272k 캡\(이 세션\)/);
+	assert.match(describeConfig(defaultCtxCap(), true), /1M ON\(이 세션\)/);
 	assert.match(describeConfig(defaultCtxCap(), false), /openai-codex→1\.05M/);
 	assert.equal(fmt(999), "999");
 	assert.equal(fmt(1_050_000), "1.05M");
+});
+
+test("capChipLabel — 푸터에서 1M/272k 를 눈으로 구분하는 칩", () => {
+	// 캡(기본): 잠금 + 캡 값
+	assert.equal(capChipLabel(false, 272_000, 1_050_000), "🔒272k");
+	assert.equal(capChipLabel(false, 300_000, 1_050_000), "🔒300k");
+	// 해제: 열림 + 모드 이름(1.0~1.9M 은 1M)
+	assert.equal(capChipLabel(true, 272_000, 1_050_000), "🔓1M");
+	assert.equal(capChipLabel(true, 272_000, 1_000_000), "🔓1M");
+	// 1M 대역이 아니면 실제 값
+	assert.equal(capChipLabel(true, 272_000, 800_000), "🔓800k");
+	assert.equal(capChipLabel(true, 272_000, 2_000_000), "🔓2M");
 });

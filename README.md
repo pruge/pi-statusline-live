@@ -46,13 +46,13 @@ pi -e github.com/pruge/pi-statusline-live
 | `⚡provider` | active provider, always shown (`⚡OpenAI`, `⚡Gemini`, `⚡Ollama`, custom `my-proxy` → `⚡My Proxy`); quota bars appended below when available |
 | `path` | last 3 segments of cwd |
 | `git` | branch + `✓/✗` dirty |
-| `context` | `% + bar` vs model context window |
+| `context` | `% + bar` vs model context window, prefixed with the cap chip (`🔒272k` dim / `🔓1M` warning) |
 | `cost` | session USD |
 | `tokens` | `↑in ↓out R W` session totals |
 | `⚡Anthropic 5h 7d` | Anthropic OAuth usage (`api.anthropic.com/api/oauth/usage`), used % + reset |
 | `⚡Codex 5h 7d` | OpenAI Codex (`chatgpt.com/backend-api/wham/usage`), `rate_limit` 의 5h/7d 창, used % + reset |
 | `⚡OpenCode Go 5h 7d 30d` | OpenCode Go API key (`/zen/go/v1/usage`; dashboard scrape as fallback). `rolling`/`weekly`/`monthly` → `5h`/`7d`/`30d` gauges |
-| `context` cap | `/ctx` moves the active model's context window (272k cap ↔ real 1.05M); the release is per session |
+| `context` cap | `/ctx on` opens the active model's real window (1.05M) for that session; `/ctx off` keeps the 272k auto-compact cap |
 
 ## Commands
 
@@ -61,10 +61,11 @@ pi -e github.com/pruge/pi-statusline-live
 /live-status refresh  — force quota refetch now
 /live-status on|off   — toggle custom footer (off = native footer back)
 
-/ctx                  — context cap status (this session's release state + effective window)
-/ctx off              — release THIS session only, up to the real window
-/ctx on|toggle        — put this session back under the cap / flip
-/ctx <272k|300k|1m>   — set the global cap value and put this session back under it
+/ctx                  — context cap status (this session's 1M switch + effective window)
+/ctx on               — use 1M in THIS session only (up to the real window)
+/ctx off              — back to the 272k cap in THIS session (default)
+/ctx toggle           — flip
+/ctx cap <272k|300k|1m>  — set the GLOBAL default cap (every session)
 ```
 
 ## Context cap (`/ctx`) — per session
@@ -76,12 +77,12 @@ turn) and would blow the summary output cap up to 128k (`0.8 * reserveTokens`, c
 `maxTokens`) — so this extension edits the window, per model, at runtime via `pi.setModel`.
 
 OpenAI/Codex `gpt-5.x` sits in the catalogue at the short-context tier `272000` while the
-real window is `1050000`. The cap is the default for **every** session; releasing is
-**per session** — run `/ctx off` in the one session you want, and the other sessions keep
-the 272k cap.
+real window is `1050000`. The 272k cap is the default for **every** session; the 1M switch
+is **per session** — `/ctx on` in the one session you want, and the other sessions keep the
+272k cap.
 
-- every session: **cap @ 272k** → `contextWindow = 272000`, auto-compact ~272k (unchanged behaviour)
-- `/ctx off` in one session → `contextWindow = 1050000` for **that session only**, auto-compact ~1.03M
+- `/ctx off` (every session by default): **272k cap** → `contextWindow = 272000`, auto-compact ~272k (unchanged behaviour)
+- `/ctx on` in one session: **1M ON** → `contextWindow = 1050000` for **that session only**, auto-compact ~1.03M
 
 Two layers make that work:
 
@@ -90,8 +91,21 @@ Two layers make that work:
 | cap + target providers | `~/.pi/agent/ctx-window.json` | every session (the default) |
 | `released` switch | `pi.appendEntry("ctx-cap", …)` inside the session file | just that session |
 
-The release survives `/reload` and `--resume` of that session (restored from its own
+The 1M switch survives `/reload` and `--resume` of that session (restored from its own
 entries) and never leaks to another session.
+
+The footer says which mode you are in, next to the context gauge — the chip is
+`🔒272k` (dim) while capped and `🔓1M` (bold warning) once open, and the window
+denominator flips `272k` ↔ `1.1M` with it:
+
+```
+○ idle │ 🤖 gpt-5.6-sol 🧠 high │ ⚡Codex … │ 24% ▓▓ 65k/272k │ …   # capped (default)
+○ idle │ 🤖 gpt-5.6-sol 🧠 high │ ⚡Codex … │ 🔓1M 6% ▓ 65k/1.1M │ …  # /ctx on
+```
+
+It repaints on the command itself (no need to wait for the next model response), and the
+ctx snapshot for orchestrators is rewritten at the same moment. Non-target providers get
+no chip.
 
 ```json
 { "v": 1, "cap": 272000, "providers": { "openai-codex": 1050000 } }
@@ -100,7 +114,7 @@ entries) and never leaks to another session.
 Add another provider/real-window pair to `providers` to cap it too. Models whose catalogue
 window is smaller than the cap (e.g. `gpt-5.3-codex-spark` 128k) and other providers are
 never touched. With the cap on and the catalogue already at 272k, no `pi.setModel` call
-happens at all (no session churn); releasing leaves one `model_change` + one `ctx-cap`
+happens at all (no session churn); turning 1M on leaves one `model_change` + one `ctx-cap`
 entry in that one session.
 
 ## Ctx registry (for orchestrators)

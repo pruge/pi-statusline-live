@@ -5,10 +5,12 @@
  *  - @wierdbytes/pi-statusline (base UI: model / path / git / context / cost / tokens)
  *  - @latentminds/pi-quotas (realtime quota fetch: Anthropic 5h/7d, Codex 5h/7d, OpenCode Go 5h/7d/monthly)
  *
- * 0.2.19: 컨텍스트 캡 — /ctx off 는 **그 세션만** Codex 실창(1.05M)을 연다.
- *   기본은 현행과 같은 272k 자동 compact(창을 바꾸는 건 pi 의 compact 판정이
- *   `contextWindow - reserveTokens` 하나로 돌기 때문). 해제는 세션 custom entry 에만
- *   남아 resume 해도 그 세션만 풀리고 옆 세션은 캡 그대로.
+ * 0.2.20: 컨텍스트 캡 — /ctx on 은 **그 세션만** Codex 실창(1.05M)을 열고,
+ *   /ctx off 는 현행과 같은 272k 자동 compact(기본). 창을 바꾸는 건 pi 의
+ *   compact 판정이 `contextWindow - reserveTokens` 하나로 돌기 때문. 1M 스위치는
+ *   세션 custom entry 에만 남아 resume 해도 그 세션만 풀리고 옆 세션은 캡 그대로.
+ *   푸터 ctx 게이지 앞에 상태 칩(🔒272k dim · 🔓1M warning) — 명령을 치면 다음
+ *   모델 응답을 기다리지 않고 바로 다시 그려진다(repaint + 스냅샷 재기록).
  * 0.2.18: OpenCode Go 월간(monthly) 게이지 추가 — 5h/7d 옆에 30d 로 붙는다.
  * 0.2.16: OpenCode Go 5h/7d 를 API 키로 조회(https://opencode.ai/zen/go/v1/usage).
  * 대시보드 스크랩(workspaceId + authCookie)은 폴백으로 유지 — 별도 설정 없이 pi auth 의
@@ -25,7 +27,7 @@
 import { cacheRatio, cacheReadLabel, cacheReadSuffix, cacheTone, cachePaint, colorForTone, GOOD_OPTIONS } from "../src/cache-segment.ts";
 import { codexWindows, opencodeWindows, toMs } from "../src/quota-windows.ts";
 import { CTX_TTL_MS, snapshotKey, staleNames, type CtxEntry } from "../src/ctx-snapshot.ts";
-import { CTX_CAP_FILE, CTX_CAP_ENTRY, describeConfig, fmt, parseCapToken, parseConfig, releasedFromEntries, resolveWindow, type CtxCapConfig } from "../src/ctx-cap.ts";
+import { CTX_CAP_FILE, CTX_CAP_ENTRY, capChipLabel, describeConfig, fmt, parseCapToken, parseConfig, releasedFromEntries, resolveWindow, type CtxCapConfig } from "../src/ctx-cap.ts";
 import { detectColorMode, downgradeAnsi, foldLines, paintLiteral } from "../src/ansi.ts";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
@@ -517,9 +519,17 @@ function renderPhase(t: any, phase: Phase, toolName: string, thinkLevel: string,
 }
 
 // ── render (footer line) ──
+/** 푸터가 그리는 캡 상태 칩. null = 이 provider 는 캡 대상이 아니다(칩 없음). */
+type CapChip = { released: boolean; label: string } | null;
+function capChipText(t: any, chip: CapChip): string {
+  if (!chip) return "";
+  // 해제는 예외 상태다 — 경고색·bold 로 눈에 띄게. 캡(기본)은 dim 으로 조용히.
+  const paint = chip.released ? t.bold(t.fg("warning", chip.label)) : t.fg("dim", chip.label);
+  return paint + " ";
+}
 function renderLine(
   ctx: ExtensionContext, width: number, quota: QuotaState,
-  phase: Phase, toolName: string, thinkLevel: string, tick: number,
+  phase: Phase, toolName: string, thinkLevel: string, tick: number, capChip: CapChip = null,
 ): string[] {
   const t = ctx.ui.theme;
   const stats = gatherStats(ctx);
@@ -560,7 +570,8 @@ function renderLine(
   // context (fullness signal: green → yellow → red)
   if (ctxWin > 0 && ctxPct >= 0) {
     // 창 대비 사용량 하나를 두 번 말하지 않는다(백분율 + 게이지 + "남은 토큰") → "24% ▓▓░░ 236k/1M"
-    parts.push(gaugePct(t, "ctx", ctxPct) + " " + gaugeBar(t, "ctx", ctxPct) + t.fg("dim", ` ${fmtTokens(ctxCur)}/`) + t.fg("accent", fmtWin(ctxWin)));
+    // 앞의 칩이 "지금 1M 인가 272k 인가"를 색과 자물쇠로 말한다 — 명령 직후 바로 바뀐다.
+    parts.push(capChipText(t, capChip) + gaugePct(t, "ctx", ctxPct) + " " + gaugeBar(t, "ctx", ctxPct) + t.fg("dim", ` ${fmtTokens(ctxCur)}/`) + t.fg(capChip?.released ? "warning" : "accent", fmtWin(ctxWin)));
   }
   // 5h/7d quota gauges — each its own part so the │ separator sits between them.
   for (const q of quotaChips) parts.push(q);
@@ -695,6 +706,16 @@ export default function (pi: ExtensionAPI) {
     const sid = (() => { try { return ctx.sessionManager.getSessionId(); } catch { return "?"; } })();
     return `${describeConfig(capCfg, capReleased)} · ${model} 창 ${w > 0 ? fmt(w) : "?"}${native > 0 && native !== w ? ` (카탈로그 ${fmt(native)})` : ""} · 세션 ${String(sid).slice(0, 8)}`;
   }
+  /** 푸터 칩: 이 provider 가 캡 대상일 때만. 명령 직후 render 가 바로 읽는다. */
+  function capChipFor(ctx: ExtensionContext): CapChip {
+    try {
+      const p = ctx.model?.provider;
+      if (!p) return null;
+      const full = capCfg.providers[p];
+      if (!(typeof full === "number" && full > 0)) return null;
+      return { released: capReleased, label: capChipLabel(capReleased, capCfg.cap, full) };
+    } catch { return null; }
+  }
 
   function installFooter(ctx: ExtensionContext) {
     currentCtx = ctx;
@@ -707,7 +728,7 @@ export default function (pi: ExtensionAPI) {
         invalidate() {},
         render(width: number): string[] {
           syncThinkLevel(ctx);
-          return renderLine(ctx, width, quota, phase, toolName, thinkLevel, tick);
+          return renderLine(ctx, width, quota, phase, toolName, thinkLevel, tick, capChipFor(ctx));
         },
       };
     });
@@ -818,9 +839,9 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerCommand("ctx", {
-    description: "컨텍스트 캡 — 기본 272k 자동 compact, /ctx off 는 이 세션만 Codex 실제 창(1.05M) 해제",
+    description: "컨텍스트 캡 — /ctx on = 이 세션만 1.05M, /ctx off = 이 세션 272k 자동 compact(기본)",
     getArgumentCompletions: (prefix: string) => {
-      const items = ["status", "on", "off", "toggle", "272k", "300k", "1m", "1.05m"]
+      const items = ["status", "on", "off", "toggle", "1m", "272k", "cap"]
         .filter((v) => v.startsWith(prefix))
         .map((v) => ({ value: v, label: v }));
       return items.length > 0 ? items : null;
@@ -828,22 +849,25 @@ export default function (pi: ExtensionAPI) {
     handler: async (args, ctx) => {
       const a = (args ?? "").trim().toLowerCase();
       if (a === "" || a === "status") { ctx.ui.notify(capStatus(ctx), "info"); return; }
-      if (a === "on" || a === "cap" || a === "lock") capReleased = false;
-      else if (a === "off" || a === "unlock" || a === "free" || a === "release") capReleased = true;
+      // on = 1M(해제) · off = 272k 캡(기본). 별칭은 그 방향을 따라간다.
+      if (a === "on" || a === "1m" || a === "unlock" || a === "free" || a === "release") capReleased = true;
+      else if (a === "off" || a === "272k" || a === "lock") capReleased = false;
       else if (a === "toggle") capReleased = !capReleased;
       else {
-        const n = parseCapToken(a);
+        // `cap <N>` / 맨 숫자 = **전역** 기본 캡 수치(모든 세션). 세션 스위치는 on|off.
+        const tok = a.startsWith("cap") ? a.split(/\s+/)[1] : a;
+        const n = tok ? parseCapToken(tok) : null;
         if (n === null) {
-          ctx.ui.notify(`모르는 인자: ${a} — /ctx [status|on|off|toggle|<272k|300k|1m>]`, "error");
+          ctx.ui.notify(`모르는 인자: ${a} — /ctx [status|on|off|toggle] · /ctx cap <272k|300k|1m>(전역)`, "error");
           return;
         }
-        // cap 수치는 전역 기본값이다. 기대한 효과가 바로 보이도록 이 세션은 캡으로 되돌린다.
         capCfg = { ...capCfg, cap: n };
-        capReleased = false;
         saveCtxCap(capCfg);
       }
       persistReleased();
       await applyCap(ctx);
+      // 명령 직후 바로 반영: 다음 코드덱스 응답을 기다리지 않는다. 스냅샷도 같이(orch 몫).
+      try { writeCtxSnapshot(ctx); } catch { /* ignore */ }
       repaint();
       ctx.ui.notify(capStatus(ctx), "info");
     },

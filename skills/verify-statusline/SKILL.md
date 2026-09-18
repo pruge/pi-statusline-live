@@ -30,25 +30,25 @@ npm test       # cache-segment 53 + ctx-snapshot 3 + ctx-cap 17 + quota-windows 
 Then the contract checks (commands, not eyeballing):
 
 ```bash
-# ctx-cap rule: cap ON keeps the catalogue tier, cap OFF opens the real window
-node -e "import('./src/ctx-cap.ts').then(m => { const c = m.defaultCtxCap(); console.log(m.resolveWindow(272000,'openai-codex',c), m.resolveWindow(272000,'openai-codex',{...c,enabled:false}), m.resolveWindow(128000,'openai-codex',{...c,enabled:false}), m.resolveWindow(200000,'anthropic',c)); })"
+# ctx-cap rule: default keeps the catalogue tier, `/ctx on` (released) opens the real window
+node -e "import('./src/ctx-cap.ts').then(m => { const c = m.defaultCtxCap(); console.log('capped', m.resolveWindow(272000,'openai-codex',c,false), 'on', m.resolveWindow(272000,'openai-codex',c,true), 'spark', m.resolveWindow(128000,'openai-codex',c,true), 'anthropic', m.resolveWindow(200000,'anthropic',c,true)); })"
 # ctx-snapshot shape: key + TTL twin constant matches the reader side
 node -e "import('./src/ctx-snapshot.ts').then(m => console.log(m.snapshotKey({HERDR_PANE_ID:'w9B:p1'}), m.CTX_TTL_MS))"
 # quota endpoint (needs the real key in keychain; read-only GET, optional)
 curl -s -m 10 -H "Authorization: Bearer $(security find-generic-password -ws 'opencode')" https://opencode.ai/zen/go/v1/usage | head -c 200
 ```
 
-Manual only: footer rendering and gauge colors inside pi (`/live-status refresh`, `/ctx off` + next turn's `model_select`/compaction threshold, Divider widths). Scripted checks cannot see pixels or drive pi's compaction loop — say so instead of claiming coverage.
+Manual only: footer rendering, the cap chip's color/width, and gauge colors inside pi (`/live-status refresh`, `/ctx on` → the `🔓1M` chip appears without a model response, `/ctx off` → `🔒272k`, Divider widths). Scripted checks cannot see pixels or drive pi's compaction loop — say so instead of claiming coverage. `capChipLabel()` itself is unit-tested (`🔒272k` / `🔓1M` / `🔓800k`).
 
 The per-session half *is* scriptable — the extension edits the live model window, so a print-mode run shows it:
 
 ```bash
-# cap in one session, release in that session only, another session stays capped
+# cap in one session (default), 1M on in that session only, another session stays capped
 printf '{"v":1,"cap":272000,"providers":{"opencode-go":1000000}}' > ~/.pi/agent/ctx-window.json
 FOOT=extensions/live-statusline.ts
-# (1) fresh turn → capped, (2) /ctx off (command, no model call), (3) turn → released,
-# (4) /ctx on, (5) turn → capped again. A second --session-id never picks up the release.
-pi -p -ne -ns -np -nc -e "$FOOT" --session-id S --model opencode-go/deepseek-v4.1-flash -- "/ctx off"
+# (1) fresh turn → capped, (2) /ctx on (command, no model call), (3) turn → 1M,
+# (4) /ctx off, (5) turn → capped again. A second --session-id never picks up 1M.
+pi -p -ne -ns -np -nc -e "$FOOT" --session-id S --model opencode-go/deepseek-v4.1-flash -- "/ctx on"
 # the session's own jsonl must contain: customType "ctx-cap" data {"released":true}
 grep -o '"customType":"ctx-cap","data":{[^}]*}' ~/.pi/agent/sessions/*/*S*.jsonl
 ```
