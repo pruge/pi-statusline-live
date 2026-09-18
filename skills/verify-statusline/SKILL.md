@@ -24,7 +24,7 @@ ls extensions/live-statusline.ts src/cache-segment.ts src/ctx-snapshot.ts src/ct
 
 ```bash
 npm run check  # esbuild, no warnings
-npm test       # cache-segment 53 + ctx-snapshot 3 + ctx-cap 17 + quota-windows 8
+npm test       # cache-segment 53 + ctx-snapshot 3 + ctx-cap 18 + quota-windows 8
 ```
 
 Then the contract checks (commands, not eyeballing):
@@ -38,17 +38,17 @@ node -e "import('./src/ctx-snapshot.ts').then(m => console.log(m.snapshotKey({HE
 curl -s -m 10 -H "Authorization: Bearer $(security find-generic-password -ws 'opencode')" https://opencode.ai/zen/go/v1/usage | head -c 200
 ```
 
-Manual only: footer rendering, the cap chip's color/width, and gauge colors inside pi (`/live-status refresh`, `/ctx on` → the `🔓1M` chip appears without a model response, `/ctx off` → `🔒272k`, Divider widths). Scripted checks cannot see pixels or drive pi's compaction loop — say so instead of claiming coverage. `capChipLabel()` itself is unit-tested (`🔒272k` / `🔓1M` / `🔓800k`).
+Manual only: footer rendering, the mode chip's color/width, and gauge colors inside pi (`/live-status refresh`, `/ctx max` → the `🔓max` chip appears without a model response, `/ctx slim` → `🔒slim`, Divider widths). Scripted checks cannot see pixels or drive pi's compaction loop — say so instead of claiming coverage. `capChipLabel()` itself is unit-tested (`🔒slim` / `🔓max`).
 
 The per-session half *is* scriptable — the extension edits the live model window, so a print-mode run shows it:
 
 ```bash
-# cap in one session (default), 1M on in that session only, another session stays capped
+# cap in one session (default), max in that session only, another session stays slim
 printf '{"v":1,"cap":272000,"providers":{"opencode-go":1000000}}' > ~/.pi/agent/ctx-window.json
 FOOT=extensions/live-statusline.ts
-# (1) fresh turn → capped, (2) /ctx on (command, no model call), (3) turn → 1M,
-# (4) /ctx off, (5) turn → capped again. A second --session-id never picks up 1M.
-pi -p -ne -ns -np -nc -e "$FOOT" --session-id S --model opencode-go/deepseek-v4.1-flash -- "/ctx on"
+# (1) fresh turn → slim, (2) /ctx max (command, no model call), (3) turn → 1M,
+# (4) /ctx slim, (5) turn → slim again. A second --session-id never picks up max.
+pi -p -ne -ns -np -nc -e "$FOOT" --session-id S --model opencode-go/deepseek-v4.1-flash -- "/ctx max"
 # the session's own jsonl must contain: customType "ctx-cap" data {"released":true}
 grep -o '"customType":"ctx-cap","data":{[^}]*}' ~/.pi/agent/sessions/*/*S*.jsonl
 ```
@@ -60,7 +60,7 @@ sequence above (turn → command → turn), not command-only.
 
 ## Evidence
 
-Proof is the terminal transcript: clean `check`, `tests 81 pass 0 fail` (cache-segment 53 + 3 + 17 + 8), the snapshot key + TTL line, the ctx-cap rule line, the per-session jsonl `ctx-cap` entry, and (if run) a 200 with `rolling/weekly/monthly` all three landing as `5h`/`7d`/`30d` gauges. Keep it in `artifacts/verify-statusline/<run>.log` via tee.
+Proof is the terminal transcript: clean `check`, `tests 82 pass 0 fail` (cache-segment 53 + 3 + 18 + 8), the snapshot key + TTL line, the ctx-cap rule line, the per-session jsonl `ctx-cap` entry, and (if run) a 200 with `rolling/weekly/monthly` all three landing as `5h`/`7d`/`30d` gauges. Keep it in `artifacts/verify-statusline/<run>.log` via tee.
 
 ## Cleanup
 

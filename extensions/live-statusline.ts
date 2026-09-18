@@ -5,12 +5,12 @@
  *  - @wierdbytes/pi-statusline (base UI: model / path / git / context / cost / tokens)
  *  - @latentminds/pi-quotas (realtime quota fetch: Anthropic 5h/7d, Codex 5h/7d, OpenCode Go 5h/7d/monthly)
  *
- * 0.2.20: 컨텍스트 캡 — /ctx on 은 **그 세션만** Codex 실창(1.05M)을 열고,
- *   /ctx off 는 현행과 같은 272k 자동 compact(기본). 창을 바꾸는 건 pi 의
- *   compact 판정이 `contextWindow - reserveTokens` 하나로 돌기 때문. 1M 스위치는
- *   세션 custom entry 에만 남아 resume 해도 그 세션만 풀리고 옆 세션은 캡 그대로.
- *   푸터 ctx 게이지 앞에 상태 칩(🔒272k dim · 🔓1M warning) — 명령을 치면 다음
- *   모델 응답을 기다리지 않고 바로 다시 그려진다(repaint + 스냅샷 재기록).
+ * 0.2.21: 컨텍스트 캡 어휘를 max/slim 으로 — /ctx max = **그 세션만** Codex
+ *   실창(1.05M), /ctx slim = 현행과 같은 272k 자동 compact(기본). 창을 바꾸는 건
+ *   pi 의 compact 판정이 `contextWindow - reserveTokens` 하나로 돌기 때문.
+ *   max 스위치는 세션 custom entry 에만 남아 resume 해도 그 세션만 풀리고 옆
+ *   세션은 slim 그대로. 푸터 ctx 게이지 앞에 모드 칩(🔒slim dim · 🔓max warning)
+ *   — 명령을 치면 다음 모델 응답을 기다리지 않고 바로 다시 그려진다.
  * 0.2.18: OpenCode Go 월간(monthly) 게이지 추가 — 5h/7d 옆에 30d 로 붙는다.
  * 0.2.16: OpenCode Go 5h/7d 를 API 키로 조회(https://opencode.ai/zen/go/v1/usage).
  * 대시보드 스크랩(workspaceId + authCookie)은 폴백으로 유지 — 별도 설정 없이 pi auth 의
@@ -713,7 +713,7 @@ export default function (pi: ExtensionAPI) {
       if (!p) return null;
       const full = capCfg.providers[p];
       if (!(typeof full === "number" && full > 0)) return null;
-      return { released: capReleased, label: capChipLabel(capReleased, capCfg.cap, full) };
+      return { released: capReleased, label: capChipLabel(capReleased) };
     } catch { return null; }
   }
 
@@ -839,30 +839,32 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerCommand("ctx", {
-    description: "컨텍스트 캡 — /ctx on = 이 세션만 1.05M, /ctx off = 이 세션 272k 자동 compact(기본)",
+    description: "컨텍스트 캡 — /ctx max = 이 세션만 1.05M, /ctx slim = 272k 자동 compact(기본)",
     getArgumentCompletions: (prefix: string) => {
-      const items = ["status", "on", "off", "toggle", "1m", "272k", "cap"]
-        .filter((v) => v.startsWith(prefix))
-        .map((v) => ({ value: v, label: v }));
+      const items = ["status", "max", "slim", "toggle"].filter((v) => v.startsWith(prefix)).map((v) => ({ value: v, label: v }));
       return items.length > 0 ? items : null;
     },
     handler: async (args, ctx) => {
       const a = (args ?? "").trim().toLowerCase();
       if (a === "" || a === "status") { ctx.ui.notify(capStatus(ctx), "info"); return; }
-      // on = 1M(해제) · off = 272k 캡(기본). 별칭은 그 방향을 따라간다.
-      if (a === "on" || a === "1m" || a === "unlock" || a === "free" || a === "release") capReleased = true;
-      else if (a === "off" || a === "272k" || a === "lock") capReleased = false;
+      // max = 실제 창까지(이 세션) · slim = 캡(이 세션, 기본). 별칭은 그 방향을 따른다.
+      if (a === "max" || a === "1m" || a === "on" || a === "unlock" || a === "free") capReleased = true;
+      else if (a === "slim" || a === "272k" || a === "off" || a === "lock") capReleased = false;
       else if (a === "toggle") capReleased = !capReleased;
-      else {
-        // `cap <N>` / 맨 숫자 = **전역** 기본 캡 수치(모든 세션). 세션 스위치는 on|off.
-        const tok = a.startsWith("cap") ? a.split(/\s+/)[1] : a;
+      else if (a.startsWith("slim") || a.startsWith("cap")) {
+        // `/ctx slim 300k` = 그 값을 **전역** 기본 캡으로 저장하고 이 세션을 slim 으로.
+        const tok = a.split(/\s+/)[1];
         const n = tok ? parseCapToken(tok) : null;
         if (n === null) {
-          ctx.ui.notify(`모르는 인자: ${a} — /ctx [status|on|off|toggle] · /ctx cap <272k|300k|1m>(전역)`, "error");
+          ctx.ui.notify(`사용: /ctx slim <272k|300k|1m> — 전역 기본 캡(모든 세션). 이 세션만 바꾸려면 /ctx max|slim.`, "error");
           return;
         }
         capCfg = { ...capCfg, cap: n };
+        capReleased = false;
         saveCtxCap(capCfg);
+      } else {
+        ctx.ui.notify(`모르는 인자: ${a} — /ctx [status|max|slim|toggle] · /ctx slim <272k|300k|1m>(전역)`, "error");
+        return;
       }
       persistReleased();
       await applyCap(ctx);

@@ -8,8 +8,8 @@
  * 라서 요약 출력 상한이 128k 로 폭주한다. 그래서 여기서는 **모델별 창**만 만진다.
  *
  * OpenAI(Codex 포함)의 gpt-5.x 는 카탈로그에 short-context 가격 tier 인 272000 이
- * 박혀 있지만 실제 창은 1050000 이다. 기본(off)은 그 tier(272k)로 묶어 두되(현행과
- * 동일한 지점에서 자동 compact), `/ctx on` 을 친 **그 세션만** 실제 창까지 연다.
+ * 박혀 있지만 실제 창은 1050000 이다. 기본(slim)은 그 tier(272k)로 묶어 두되(현행과
+ * 동일한 지점에서 자동 compact), `/ctx max` 를 친 **그 세션만** 실제 창까지 연다.
  *
  * 두 층으로 나뉜다 — 이게 "한 세션만"의 핵심이다:
  *
@@ -113,16 +113,15 @@ export function resolveWindow(native: number, provider: string | undefined, cfg:
 /** 사람이 읽는 한 줄. 모델 없이 설정 + 세션 상태만으로 그린다. */
 export function describeConfig(cfg: CtxCapConfig, released: boolean): string {
 	const provs = Object.entries(cfg.providers).map(([k, v]) => `${k}→${fmt(v)}`).join(" ");
-	return `${released ? "1M ON(이 세션)" : `${fmt(cfg.cap)} 캡(이 세션)`} · 대상 ${provs || "(없음)"}`;
+	return `${released ? "max(이 세션)" : `slim ${fmt(cfg.cap)}(이 세션)`} · 대상 ${provs || "(없음)"}`;
 }
 
 /**
- * 푸터 ctx 앞에 붙는 칩 텍스트. 색은 부르는 쪽이 입힌다.
- * 해제는 모드 이름(1.05M → "1M"), 캡은 캡 값(272k).
+ * 푸터 ctx 앞에 붙는 모드 칩 텍스트. 색은 부르는 쪽이 입힌다.
+ * 숫자는 바로 옆 창 분모(272k · 1.1M)가 말하니, 칩은 모드 이름만 말한다.
  */
-export function capChipLabel(released: boolean, cap: number, full: number): string {
-	if (!released) return `🔒${fmt(cap)}`;
-	return full >= 1_000_000 && full < 2_000_000 ? "🔓1M" : `🔓${fmt(full)}`;
+export function capChipLabel(released: boolean): string {
+	return released ? "🔓max" : "🔒slim";
 }
 
 export function fmt(n: number): string {
