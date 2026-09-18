@@ -52,6 +52,7 @@ pi -e github.com/pruge/pi-statusline-live
 | `⚡Anthropic 5h 7d` | Anthropic OAuth usage (`api.anthropic.com/api/oauth/usage`), used % + reset |
 | `⚡Codex 5h 7d` | OpenAI Codex (`chatgpt.com/backend-api/wham/usage`), `rate_limit` 의 5h/7d 창, used % + reset |
 | `⚡OpenCode Go 5h 7d 30d` | OpenCode Go API key (`/zen/go/v1/usage`; dashboard scrape as fallback). `rolling`/`weekly`/`monthly` → `5h`/`7d`/`30d` gauges |
+| `context` cap | `/ctx` moves the active model's context window (272k cap ↔ real 1.05M); the release is per session |
 
 ## Commands
 
@@ -59,7 +60,48 @@ pi -e github.com/pruge/pi-statusline-live
 /live-status          — show on/off state
 /live-status refresh  — force quota refetch now
 /live-status on|off   — toggle custom footer (off = native footer back)
+
+/ctx                  — context cap status (this session's release state + effective window)
+/ctx off              — release THIS session only, up to the real window
+/ctx on|toggle        — put this session back under the cap / flip
+/ctx <272k|300k|1m>   — set the global cap value and put this session back under it
 ```
+
+## Context cap (`/ctx`) — per session
+
+pi decides auto-compaction with `contextTokens > model.contextWindow - reserveTokens`,
+so the model's **context window** is the only lever that moves the compaction point.
+Raising `compaction.reserveTokens` instead would be global (every model compacts every
+turn) and would blow the summary output cap up to 128k (`0.8 * reserveTokens`, capped at
+`maxTokens`) — so this extension edits the window, per model, at runtime via `pi.setModel`.
+
+OpenAI/Codex `gpt-5.x` sits in the catalogue at the short-context tier `272000` while the
+real window is `1050000`. The cap is the default for **every** session; releasing is
+**per session** — run `/ctx off` in the one session you want, and the other sessions keep
+the 272k cap.
+
+- every session: **cap @ 272k** → `contextWindow = 272000`, auto-compact ~272k (unchanged behaviour)
+- `/ctx off` in one session → `contextWindow = 1050000` for **that session only**, auto-compact ~1.03M
+
+Two layers make that work:
+
+| Layer | Where | Scope |
+|---|---|---|
+| cap + target providers | `~/.pi/agent/ctx-window.json` | every session (the default) |
+| `released` switch | `pi.appendEntry("ctx-cap", …)` inside the session file | just that session |
+
+The release survives `/reload` and `--resume` of that session (restored from its own
+entries) and never leaks to another session.
+
+```json
+{ "v": 1, "cap": 272000, "providers": { "openai-codex": 1050000 } }
+```
+
+Add another provider/real-window pair to `providers` to cap it too. Models whose catalogue
+window is smaller than the cap (e.g. `gpt-5.3-codex-spark` 128k) and other providers are
+never touched. With the cap on and the catalogue already at 272k, no `pi.setModel` call
+happens at all (no session churn); releasing leaves one `model_change` + one `ctx-cap`
+entry in that one session.
 
 ## Ctx registry (for orchestrators)
 

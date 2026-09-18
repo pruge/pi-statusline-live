@@ -5,6 +5,10 @@
  *  - @wierdbytes/pi-statusline (base UI: model / path / git / context / cost / tokens)
  *  - @latentminds/pi-quotas (realtime quota fetch: Anthropic 5h/7d, Codex 5h/7d, OpenCode Go 5h/7d/monthly)
  *
+ * 0.2.19: 컨텍스트 캡 — /ctx off 는 **그 세션만** Codex 실창(1.05M)을 연다.
+ *   기본은 현행과 같은 272k 자동 compact(창을 바꾸는 건 pi 의 compact 판정이
+ *   `contextWindow - reserveTokens` 하나로 돌기 때문). 해제는 세션 custom entry 에만
+ *   남아 resume 해도 그 세션만 풀리고 옆 세션은 캡 그대로.
  * 0.2.18: OpenCode Go 월간(monthly) 게이지 추가 — 5h/7d 옆에 30d 로 붙는다.
  * 0.2.16: OpenCode Go 5h/7d 를 API 키로 조회(https://opencode.ai/zen/go/v1/usage).
  * 대시보드 스크랩(workspaceId + authCookie)은 폴백으로 유지 — 별도 설정 없이 pi auth 의
@@ -21,6 +25,7 @@
 import { cacheRatio, cacheReadLabel, cacheReadSuffix, cacheTone, cachePaint, colorForTone, GOOD_OPTIONS } from "../src/cache-segment.ts";
 import { codexWindows, opencodeWindows, toMs } from "../src/quota-windows.ts";
 import { CTX_TTL_MS, snapshotKey, staleNames, type CtxEntry } from "../src/ctx-snapshot.ts";
+import { CTX_CAP_FILE, CTX_CAP_ENTRY, describeConfig, fmt, parseCapToken, parseConfig, releasedFromEntries, resolveWindow, type CtxCapConfig } from "../src/ctx-cap.ts";
 import { detectColorMode, downgradeAnsi, foldLines, paintLiteral } from "../src/ansi.ts";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
@@ -433,6 +438,30 @@ function removeCtxSnapshot() {
   try { rmSync(join(homedir(), ".pi", "agent", "ctx-sessions", `${snapshotKey()}.json`), { force: true }); } catch { /* ignore */ }
 }
 
+// ── ctx cap: ~/.pi/agent/ctx-window.json (전역 기본값) + 세션 custom entry(해제) ──
+// pi 의 자동 compact 판정은 `contextTokens > model.contextWindow - reserveTokens` 라서
+// **모델 창 하나**가 compact 지점을 정한다(전역 reserveTokens 를 키우면 다른 모델까지
+// 매 턴 compact 되고 요약 출력 상한이 128k 로 폭주한다 — 그래서 창을 만진다).
+//
+// 층이 둘이다:
+//   전역 파일  = 캡 수치·대상 provider (모든 세션이 공유)
+//   세션 entry = "이 세션은 해제" — pi.appendEntry("ctx-cap") 로 그 세션 파일에만 남는다
+// 그래서 한 세션에서 /ctx off 를 쳐도 다른 세션은 272k 캡 그대로다.
+// 규칙·파싱은 src/ctx-cap.ts(순수), IO 는 여기만.
+function ctxCapPath(): string { return join(homedir(), ".pi", "agent", CTX_CAP_FILE); }
+function loadCtxCap(): CtxCapConfig {
+  try { return parseConfig(JSON.parse(readFileSync(ctxCapPath(), "utf8"))); } catch { return parseConfig(undefined); }
+}
+function saveCtxCap(cfg: CtxCapConfig): void {
+  try {
+    const file = ctxCapPath();
+    mkdirSync(dirname(file), { recursive: true });
+    const tmp = `${file}.tmp-${process.pid}`;
+    writeFileSync(tmp, JSON.stringify(cfg, null, 2) + "\n");
+    renameSync(tmp, file);
+  } catch { /* 설정 저장 실패는 푸터를 깨지 않는다 */ }
+}
+
 // per-provider cache (anthropic 5min, others 60s)
 const quotaCache = new Map<string, QuotaState>();
 const TTL: Record<string, number> = { anthropic: 5 * 60_000, "claude-bridge": 5 * 60_000, "openai-codex": 60_000, "opencode-go": 60_000 };
@@ -598,6 +627,9 @@ export default function (pi: ExtensionAPI) {
   g[GUARD_KEY] = instanceId;
 
   let currentCtx: ExtensionContext | undefined;
+  let capCfg: CtxCapConfig = loadCtxCap();
+  // 이 세션 전용 해제 스위치 — 세션 entry 에서 복원, /ctx off 로만 켜진다.
+  let capReleased = false;
   let timer: ReturnType<typeof setInterval> | undefined;
   let spinTimer: ReturnType<typeof setInterval> | undefined;
   let quota: QuotaState = { at: 0, chips: [] };
@@ -625,6 +657,43 @@ export default function (pi: ExtensionAPI) {
       const lvl = (ctx as any).thinkingLevel ?? (pi as any).getThinkingLevel?.();
       if (typeof lvl === "string") thinkLevel = lvl;
     } catch { /* ignore */ }
+  }
+
+  // 모델 창을 설정대로 맞춘다. **바뀔 때만** pi.setModel — 캡(기본)에서는 카탈로그
+  // 값(272k)과 같아 호출 자체가 없다(세션에 model_change 오염 0). 이 세션만 해제하면
+  // 세션당 1회 model_change + 1회 ctx-cap entry 가 남는다.
+  function nativeWindow(ctx: ExtensionContext): number {
+    try {
+      const m = ctx.model;
+      if (!m) return 0;
+      return ctx.modelRegistry.find(m.provider, m.id)?.contextWindow ?? m.contextWindow;
+    } catch { return ctx.model?.contextWindow ?? 0; }
+  }
+  let applyingCap = false;
+  async function applyCap(ctx: ExtensionContext): Promise<void> {
+    if (applyingCap) return; // 우리 setModel 이 띄운 model_select 재진입 차단
+    try {
+      const model = ctx.model;
+      if (!model) return;
+      const want = resolveWindow(nativeWindow(ctx), model.provider, capCfg, capReleased);
+      if (!(want > 0) || model.contextWindow === want) return;
+      applyingCap = true;
+      await pi.setModel({ ...model, contextWindow: want });
+      repaint();
+    } catch { /* 캡 적용 실패는 세션을 깨지 않는다 */ }
+    finally { applyingCap = false; }
+  }
+  /** 이 세션에만 해제 상태를 기록한다(전역 파일 아님). */
+  function persistReleased(): void {
+    try { pi.appendEntry(CTX_CAP_ENTRY, { released: capReleased }); } catch { /* ignore */ }
+  }
+  function capStatus(ctx: ExtensionContext): string {
+    const m = ctx.model;
+    const w = typeof m?.contextWindow === "number" ? m.contextWindow : 0;
+    const native = nativeWindow(ctx);
+    const model = m ? `${m.provider}/${m.id}` : "?";
+    const sid = (() => { try { return ctx.sessionManager.getSessionId(); } catch { return "?"; } })();
+    return `${describeConfig(capCfg, capReleased)} · ${model} 창 ${w > 0 ? fmt(w) : "?"}${native > 0 && native !== w ? ` (카탈로그 ${fmt(native)})` : ""} · 세션 ${String(sid).slice(0, 8)}`;
   }
 
   function installFooter(ctx: ExtensionContext) {
@@ -677,7 +746,11 @@ export default function (pi: ExtensionAPI) {
   }
 
   pi.on("session_start", async (_e, ctx) => {
-    if (!footerOn) { currentCtx = ctx; return; }
+    currentCtx = ctx;
+    // 이 세션 파일에 남은 해제 상태만 복원한다 — 다른 세션은 영향을 받지 않는다.
+    try { capReleased = releasedFromEntries(ctx.sessionManager.getEntries()); } catch { capReleased = false; }
+    void applyCap(ctx); // 푸터 on/off 와 무관하게 캡은 적용된다
+    if (!footerOn) return;
     installFooter(ctx);
     startTimers();
     void update(true);
@@ -710,6 +783,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("model_select", async (_e, ctx) => {
     currentCtx = ctx;
     syncThinkLevel(ctx);
+    void applyCap(ctx);
     writeCtxSnapshot(ctx);
     void update(true);
   });
@@ -740,6 +814,38 @@ export default function (pi: ExtensionAPI) {
         ].join("\n"),
         "info",
       );
+    },
+  });
+
+  pi.registerCommand("ctx", {
+    description: "컨텍스트 캡 — 기본 272k 자동 compact, /ctx off 는 이 세션만 Codex 실제 창(1.05M) 해제",
+    getArgumentCompletions: (prefix: string) => {
+      const items = ["status", "on", "off", "toggle", "272k", "300k", "1m", "1.05m"]
+        .filter((v) => v.startsWith(prefix))
+        .map((v) => ({ value: v, label: v }));
+      return items.length > 0 ? items : null;
+    },
+    handler: async (args, ctx) => {
+      const a = (args ?? "").trim().toLowerCase();
+      if (a === "" || a === "status") { ctx.ui.notify(capStatus(ctx), "info"); return; }
+      if (a === "on" || a === "cap" || a === "lock") capReleased = false;
+      else if (a === "off" || a === "unlock" || a === "free" || a === "release") capReleased = true;
+      else if (a === "toggle") capReleased = !capReleased;
+      else {
+        const n = parseCapToken(a);
+        if (n === null) {
+          ctx.ui.notify(`모르는 인자: ${a} — /ctx [status|on|off|toggle|<272k|300k|1m>]`, "error");
+          return;
+        }
+        // cap 수치는 전역 기본값이다. 기대한 효과가 바로 보이도록 이 세션은 캡으로 되돌린다.
+        capCfg = { ...capCfg, cap: n };
+        capReleased = false;
+        saveCtxCap(capCfg);
+      }
+      persistReleased();
+      await applyCap(ctx);
+      repaint();
+      ctx.ui.notify(capStatus(ctx), "info");
     },
   });
 
