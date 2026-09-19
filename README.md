@@ -52,7 +52,7 @@ pi -e github.com/pruge/pi-statusline-live
 | `⚡Anthropic 5h 7d` | Anthropic OAuth usage (`api.anthropic.com/api/oauth/usage`), used % + reset |
 | `⚡Codex 5h 7d` | OpenAI Codex (`chatgpt.com/backend-api/wham/usage`), `rate_limit` 의 5h/7d 창, used % + reset |
 | `⚡OpenCode Go 5h 7d 30d` | OpenCode Go API key (`/zen/go/v1/usage`; dashboard scrape as fallback). `rolling`/`weekly`/`monthly` → `5h`/`7d`/`30d` gauges |
-| `⚡Cline 5h 7d 30d` | Cline Pass subscription — `api.cline.bot` plan limits (`inferenceCapThreshold`) ÷ summed `usages` cost over each rolling window. No reset tail: the windows are rolling, so there is no server-given reset moment |
+| `⚡Cline 5h 7d 30d` | ClinePass subscription — `api.cline.bot` `/api/v1/users/me/plan/usage-limits` gives the server-computed `percentUsed` + `resetsAt` per window (five_hour/weekly/monthly). One call, no client-side synthesis |
 | `context` cap | `/ctx max` opens the active model's real window (1.05M) for that session; `/ctx slim` keeps the 272k auto-compact cap |
 
 ## Commands
@@ -134,7 +134,7 @@ No extra setup — reads what pi already has:
 - Anthropic: `~/.pi/agent/auth.json` (`anthropic` OAuth, `/login anthropic`). `sk-ant-api*` keys have no subscription usage → chip hidden.
 - Codex: pi auth `openai-codex` + `~/.codex/auth.json` account id.
 - OpenCode Go: pi auth `opencode-go` / `opencode` key (or `OPENCODE_API_KEY`) — no setup. Dashboard scrape (`OPENCODE_GO_WORKSPACE_ID` + `OPENCODE_GO_AUTH_COOKIE`, or `~/.config/opencode/opencode-quota/opencode-go.json`) stays as fallback for keys without API access.
-- Cline: pi auth `cline` API key (or `CLINE_API_KEY`) — the `!security …` keychain reference is expanded at runtime, no file copy. Needs a Cline Pass plan with `cline_pass` entitlement; without a subscription the gauges stay hidden (`no-plan`), which is a subscription state, not a failure.
+- Cline: pi auth `clinepass` OAuth token (or `CLINE_API_KEY`). Reuses the WorkOS login that `pi-clinepass-provider` stores in `~/.pi/agent/auth.json` / `~/.cline`; the token is read-only here — refreshing it would break the provider's own next refresh (WorkOS refresh tokens are single-use). Needs a ClinePass plan; without a subscription the gauges stay hidden (`no-plan`), which is a subscription state, not a failure.
 
 ## Credits
 

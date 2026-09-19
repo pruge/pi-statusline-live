@@ -67,69 +67,55 @@ test("opencodeWindows — percent 가 숫자가 아니면 그 창만 건너뛰�
 	]);
 });
 
-// 2026-09-19 실측(GET api.cline.bot/api/v1/users/me/plan, HTTP 200). 이메일/id 는 가림.
-// 핵심은 data.plan.entitlements.cline_pass.inferenceCapThreshold 의 세 한도.
-const CLINE_PLAN_LIVE = {
-	planHistoryId: "iph-fixture",
-	userId: "usr-fixture",
-	plan: {
-		id: "pln-fixture",
-		displayName: "Cline Pass (Monthly)",
-		entitlements: {
-			cline_pass: {
-				enabled: true,
-				inferenceCapThreshold: {
-					last5HoursUsageCostUSDPerUser: 1000000000,
-					last7daysUsageCostUSDPerUser: 2500000000,
-					last30daysUsageCostUSDPerUser: 5000000000,
-				},
-			},
-		},
+// 2026-09-19 실측(GET api.cline.bot/api/v1/users/me/plan/usage-limits, HTTP 200).
+// 서버가 사용률(percentUsed)을 직접 계산해서 준다 — 클라이언트가 plan 한도와 usages 거래를
+// 합성하면 비구독 사용량까지 끌어오므로(실측: 18% vs 홈페이지 0%) 이 엔드포인트가 정답이다.
+const CLINE_LIMITS_LIVE = {
+	data: {
+		limits: [
+			{ type: "five_hour", percentUsed: 0, resetsAt: "2026-09-19T13:17:50.05077311Z" },
+			{ type: "weekly", percentUsed: 0, resetsAt: "2026-09-26T08:17:50.052593478Z" },
+			{ type: "monthly", percentUsed: 0, resetsAt: "2026-10-19T08:17:50.054702677Z" },
+		],
 	},
-	subscriptionId: "sub-fixture",
+	success: true,
 };
 
-// 같은 날 실측한 usages items 의 모양(필드 이름·단위 고정). createdAt 은 창 계산을 위해 손봄.
-// 비용은 실측 규모(한 번의 completion ≈ 3~5천 costUsd, 활성 세션의 5h 합은 ~1.5e8) 에 맞췄다.
-const CLINE_NOW = Date.parse("2026-09-19T07:38:54Z");
-const tx = (minAgo, costUsd) => ({ id: "usg-fixture", createdAt: new Date(CLINE_NOW - minAgo * 60000).toISOString(), costUsd, creditsUsed: 47, operation: "chat_completion" });
-const CLINE_USAGES_LIVE = [
-	tx(1, 40_000_000),          // 1분 전   ┐
-	tx(120, 60_000_000),        // 2시간 전 ┘ 5h 창: 1e8
-	tx(6 * 60, 250_000_000),    // 6시간 전   (5h 밖, 7d 안)
-	tx(3 * 24 * 60, 300_000_000),  // 3일 전   (7d 안)
-	tx(10 * 24 * 60, 700_000_000), // 10일 전  (30d 안)
-];
-
-test("clineWindows — 한도로 나눈 사용률을 5h/7d/30d 로 뒤집어 남은 퍼센트로", () => {
-	// 5h 창: 1e8 / 1e9 = 10% 사용 → 남 90%
-	// 7d 창: 1e8+2.5e8+3e8 = 6.5e8 / 2.5e9 = 26% → 남 74%
-	// 30d 창: 6.5e8+7e8 = 1.35e9 / 5e9 = 27% → 남 73%
-	const out = clineWindows(CLINE_PLAN_LIVE, CLINE_USAGES_LIVE, CLINE_NOW);
-	assert.deepEqual(out.map((w) => w.label), ["5h", "7d", "30d"]);
-	assert.deepEqual(out.map((w) => Math.round(w.remainPct * 100) / 100), [90, 74, 73]);
-	// rolling 창이라 서버가 주는 리셋이 없다 — 꼬리는 그리지 않는다.
-	assert.deepEqual(out.map((w) => w.resetsAt), [0, 0, 0]);
+test("clineWindows — 실측 percentUsed(사용률)를 남은 퍼센트로 뒤집고 5h/7d/30d 로 라벨한다", () => {
+	const out = clineWindows(CLINE_LIMITS_LIVE);
+	assert.deepEqual(out, [
+		{ label: "5h", remainPct: 100, resetsAt: Date.parse("2026-09-19T13:17:50.05077311Z") },
+		{ label: "7d", remainPct: 100, resetsAt: Date.parse("2026-09-26T08:17:50.052593478Z") },
+		{ label: "30d", remainPct: 100, resetsAt: Date.parse("2026-10-19T08:17:50.054702677Z") },
+	]);
 });
 
-test("clineWindows — 구독(한도)이 없으면 빈 배열(게이지 없음, 에러 아님)", () => {
-	assert.deepEqual(clineWindows({ plan: { entitlements: { cline_pass: { enabled: false } } } }, CLINE_USAGES_LIVE, CLINE_NOW), []);
-	assert.deepEqual(clineWindows({}, CLINE_USAGES_LIVE, CLINE_NOW), []);
+test("clineWindows — 사용률을 쓰면 남은 비율로 바꾸고, 범위 밖은 0..100 으로 자른다", () => {
+	const out = clineWindows({ data: { limits: [
+		{ type: "five_hour", percentUsed: 42, resetsAt: "2026-09-19T13:17:50Z" },
+		{ type: "weekly", percentUsed: 137, resetsAt: "2026-09-26T08:17:50Z" },
+	] } });
+	assert.deepEqual(out, [
+		{ label: "5h", remainPct: 58, resetsAt: Date.parse("2026-09-19T13:17:50Z") },
+		{ label: "7d", remainPct: 0, resetsAt: Date.parse("2026-09-26T08:17:50Z") },
+	]);
 });
 
-test("clineWindows — 거래가 없어도 한도가 있으면 100% 남은 게이지 3개", () => {
-	assert.deepEqual(clineWindows(CLINE_PLAN_LIVE, [], CLINE_NOW).map((w) => w.remainPct), [100, 100, 100]);
+test("clineWindows — limits 가 없거나 비정상이면 빈 배열(게이지 없음)", () => {
+	assert.deepEqual(clineWindows({ data: { limits: [] } }), []);
+	assert.deepEqual(clineWindows({ data: {} }), []);
+	assert.deepEqual(clineWindows({}), []);
 });
 
-test("clineWindows — 한도가 0 이거나 비정수면 그 창만 건너뛴다", () => {
-	const caps = { ...CLINE_PLAN_LIVE, plan: { ...CLINE_PLAN_LIVE.plan, entitlements: { cline_pass: { enabled: true, inferenceCapThreshold: { last5HoursUsageCostUSDPerUser: 0, last7daysUsageCostUSDPerUser: 2500000000, last30daysUsageCostUSDPerUser: "x" } } } } };
-	assert.deepEqual(clineWindows(caps, CLINE_USAGES_LIVE, CLINE_NOW).map((w) => w.label), ["7d"]);
+test("clineWindows — 모르는 type 이나 비정수 percentUsed 면 그 창만 건너뛴다", () => {
+	const out = clineWindows({ data: { limits: [
+		{ type: "five_hour", percentUsed: 10, resetsAt: "2026-09-19T13:17:50Z" },
+		{ type: "quarterly", percentUsed: 5, resetsAt: "2026-12-19T08:00:00Z" }, // 모르는 type
+		{ type: "weekly", percentUsed: "n/a", resetsAt: "2026-09-26T08:17:50Z" }, // 비정수
+	] } });
+	assert.deepEqual(out.map((w) => w.label), ["5h"]);
 });
 
-test("clineWindows — 범위 밖 사용량은 0..100 으로 자른다", () => {
-	// 2e9 costUsd: 5h 한도(1e9) 초과 → 200% 사용 → 남 0(컷); 7d 은 80% 사용 → 남 20; 30d 은 40% → 남 60.
-	assert.deepEqual(clineWindows(CLINE_PLAN_LIVE, [tx(1, 2e9)], CLINE_NOW).map((w) => Math.round(w.remainPct)), [0, 20, 60]);
-});
 
 test("toMs — 초는 ms 로, ms 는 그대로, 문자열 ISO 도 받는다", () => {
 	assert.equal(toMs(1789615956), 1789615956000);
