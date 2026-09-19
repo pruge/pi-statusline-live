@@ -5,6 +5,10 @@
  *  - @wierdbytes/pi-statusline (base UI: model / path / git / context / cost / tokens)
  *  - @latentminds/pi-quotas (realtime quota fetch: Anthropic 5h/7d, Codex 5h/7d, OpenCode Go 5h/7d/monthly)
  *
+ * 0.2.22: Cline(Cline Pass 구독) 5h/7d/30d 게이지 — api.cline.bot 의
+ *   /api/v1/users/me/plan(한도 = inferenceCapThreshold) 에서 usages(거래 내역) 를
+ *   합쳐 사용률을 구한다. 단일 usage 엔드포인트가 없는 게 특징: 창은 rolling 이라
+ *   리셋 꼬리는 없고 % + 게이지만. pi auth 의 cline 키(`!security ...` 참조도 전개).
  * 0.2.21: 컨텍스트 캡 어휘를 max/slim 으로 — /ctx max = **그 세션만** Codex
  *   실창(1.05M), /ctx slim = 현행과 같은 272k 자동 compact(기본). 창을 바꾸는 건
  *   pi 의 compact 판정이 `contextWindow - reserveTokens` 하나로 돌기 때문.
@@ -25,7 +29,7 @@
  */
 
 import { cacheRatio, cacheReadLabel, cacheReadSuffix, cacheTone, cachePaint, colorForTone, GOOD_OPTIONS } from "../src/cache-segment.ts";
-import { codexWindows, opencodeWindows, toMs } from "../src/quota-windows.ts";
+import { clineWindows, codexWindows, opencodeWindows, toMs } from "../src/quota-windows.ts";
 import { CTX_TTL_MS, snapshotKey, staleNames, type CtxEntry } from "../src/ctx-snapshot.ts";
 import { CTX_CAP_FILE, CTX_CAP_ENTRY, capChipLabel, describeConfig, fmt, parseCapToken, parseConfig, releasedFromEntries, resolveWindow, type CtxCapConfig } from "../src/ctx-cap.ts";
 import { detectColorMode, downgradeAnsi, foldLines, paintLiteral } from "../src/ansi.ts";
@@ -133,6 +137,7 @@ function providerLabel(p?: string): string {
     mistral: "Mistral",
     groq: "Groq",
     cerebras: "Cerebras",
+    cline: "Cline",
     nvidia: "NVIDIA",
     openrouter: "OpenRouter",
     "github-copilot": "Copilot",
@@ -328,6 +333,50 @@ function opencodeGoConfig(): { workspaceId: string; authCookie: string } | null 
   return null;
 }
 
+// Cline (Cline Pass 구독) — https://api.cline.bot. pi auth 의 cline API 키를 쓴다.
+// `!security find-generic-password -ws 'cline'` 같은 `!command` 참조도 전개(opencode 와 같은 길).
+// 출처 순서: modelRegistry → CLINE_API_KEY env → ~/.pi/agent/auth.json 의 cline.key|access.
+const CLINE_API_BASE = process.env.CLINE_API_BASE?.trim() || "https://api.cline.bot";
+async function clineApiKey(ctx: ExtensionContext): Promise<string | undefined> {
+  try {
+    const r: any = ctx.modelRegistry as any;
+    const t = await r?.authStorage?.getApiKey?.("cline") ?? await r?.getApiKeyForProvider?.("cline");
+    if (typeof t === "string" && t) return expandCommandRef(t);
+  } catch { /* fall through */ }
+  if (process.env.CLINE_API_KEY?.trim()) return process.env.CLINE_API_KEY.trim();
+  const auth = readJson(join(homedir(), ".pi", "agent", "auth.json"));
+  const v = auth?.cline?.key ?? auth?.cline?.access;
+  if (typeof v === "string" && v) return expandCommandRef(v);
+  return undefined;
+}
+// Cline usage = plan(한도) + usages(거래) 의 합성. 응답 해석은 src/quota-windows.ts 의
+// clineWindows 한 곳에서만 한다. 30d 를 덮을 때까지만(최대 10페이지) 페이지를 넘긴다.
+async function fetchCline(apiKey?: string): Promise<QuotaChip[]> {
+  if (!apiKey || apiKey.startsWith("!")) return [];
+  const now = Date.now();
+  const planRes: any = await fetchJson(`${CLINE_API_BASE}/api/v1/users/me/plan`,
+    { Authorization: `Bearer ${apiKey}`, Accept: "application/json", "User-Agent": "Cline/4.1.10" });
+  const planData = planRes?.data;
+  const uid = planData?.userId;
+  if (!uid) return []; // 응답은 200 이지만 구독이 없으면 data.userId 가 없다
+  let items: any[] = [];
+  let nextToken: string | undefined;
+  let pages = 0;
+  for (;;) {
+    const qs = new URLSearchParams({ limit: "1000" });
+    if (nextToken) qs.set("nextToken", nextToken);
+    const d: any = await fetchJson(`${CLINE_API_BASE}/api/v1/users/${encodeURIComponent(uid)}/usages?${qs}`,
+      { Authorization: `Bearer ${apiKey}`, Accept: "application/json", "User-Agent": "Cline/4.1.10" });
+    const data = d?.data ?? {};
+    items = items.concat(Array.isArray(data.items) ? data.items : []);
+    nextToken = data.nextToken;
+    const oldest = items[items.length - 1]?.createdAt;
+    // 30d 를 덮었거나 더 이상 페이지가 없으면 멈춘다(무한 페이지네이션 방지).
+    if (!nextToken || !oldest || Date.parse(oldest) < now - 30 * 864e5 || ++pages >= 10) break;
+  }
+  return clineWindows(planData, items, now);
+}
+
 // ── fetch ──
 async function fetchJson(url: string, headers: Record<string, string>, signal?: AbortSignal) {
   const combined = AbortSignal.any([AbortSignal.timeout(FETCH_TIMEOUT_MS), ...(signal ? [signal] : [])]);
@@ -466,7 +515,7 @@ function saveCtxCap(cfg: CtxCapConfig): void {
 
 // per-provider cache (anthropic 5min, others 60s)
 const quotaCache = new Map<string, QuotaState>();
-const TTL: Record<string, number> = { anthropic: 5 * 60_000, "claude-bridge": 5 * 60_000, "openai-codex": 60_000, "opencode-go": 60_000 };
+const TTL: Record<string, number> = { anthropic: 5 * 60_000, "claude-bridge": 5 * 60_000, "openai-codex": 60_000, "opencode-go": 60_000, cline: 60_000 };
 
 async function refreshQuotas(ctx: ExtensionContext, force = false): Promise<QuotaState> {
   const provider = (() => { try { return ctx.model?.provider; } catch { return undefined; } })();
@@ -492,6 +541,11 @@ async function refreshQuotas(ctx: ExtensionContext, force = false): Promise<Quot
     } else if (provider === "opencode" || provider === "opencode-go") {
       state.chips = await fetchOpenCodeGo(ctx);
       if (state.chips.length === 0) state.error = "no-go-config";
+    } else if (provider === "cline") {
+      // Cline Pass 구독: plan(한도) + usages(거래) 합성. 키가 있어도 구독이 없으면 게이지가 안 뜬다.
+      const k = await clineApiKey(ctx);
+      state.chips = await fetchCline(k);
+      if (state.chips.length === 0) state.error = k ? "no-plan" : "no-creds";
     } else {
       // background: still try anthropic so switching back is instant — but don't show
       state.chips = [];
@@ -899,7 +953,9 @@ export default function (pi: ExtensionAPI) {
         await update(true);
         const q = quota.chips.map((c) => {
           const used = Math.max(0, Math.min(100, Math.round(100 - c.remainPct)));
-          return `${c.label} ${used}% (⏳ ${fmtReset(c.resetsAt)})`;
+          const reset = fmtReset(c.resetsAt);
+          // Cline 창은 rolling 이라 리셋이 없다 — 빈 괄호를 남기지 않는다.
+          return reset ? `${c.label} ${used}% (⏳ ${reset})` : `${c.label} ${used}%`;
         }).join(", ") || quota.error || "no data";
         ctx.ui.notify(`quotas [${quota.provider ?? "?"}]: ${q}`, "info");
         return;

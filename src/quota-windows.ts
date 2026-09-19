@@ -45,6 +45,45 @@ export function codexWindows(payload: unknown): QuotaWindow[] {
 }
 
 /**
+ * Cline Pass 구독의 사용량 창 — 5h/7d/30d. Cline 은 단일 usage 엔드포인트가 없다;
+ * plan(한도) 과 usages(거래 내역) 둘을 합쳐 사용률을 구한다(extensions/fetchCline).
+ *
+ *   GET /api/v1/users/me/plan
+ *     → data.plan.entitlements.cline_pass.inferenceCapThreshold
+ *       = { last5HoursUsageCostUSDPerUser, last7daysUsageCostUSDPerUser,
+ *           last30daysUsageCostUSDPerUser }  (한도, costUsd 단위)
+ *   GET /api/v1/users/{uid}/usages
+ *     → data.items[] ({ createdAt, costUsd })  (같은 costUsd 단위)
+ *
+ * 두 값을 **같은 단위**로 나눈다 — 서버가 한도와 사용량을 같은 costUsd 체계로 굽는다.
+ * 창은 rolling(5h/7d/30d)이라 서버가 주는 리셋 시각이 없다 → resetsAt 0 (푸터가 꼬리를
+ * 그리지 않는다). 구독이 아니거나 한도가 없으면 빈 배열(게이지 없음).
+ */
+const CLINE_WINDOWS = [
+	{ label: "5h", ms: 5 * 60 * 60 * 1000, cap: "last5HoursUsageCostUSDPerUser" },
+	{ label: "7d", ms: 7 * 24 * 60 * 60 * 1000, cap: "last7daysUsageCostUSDPerUser" },
+	{ label: "30d", ms: 30 * 24 * 60 * 60 * 1000, cap: "last30daysUsageCostUSDPerUser" },
+] as const;
+
+export function clineWindows(planData: unknown, items: unknown, now: number = Date.now()): QuotaWindow[] {
+	const caps = (planData as any)?.plan?.entitlements?.cline_pass?.inferenceCapThreshold;
+	if (!caps || typeof caps !== "object") return [];
+	const txns: { at: number; cost: number }[] = (Array.isArray(items) ? (items as any[]) : [])
+		.map((t) => ({ at: Date.parse(t?.createdAt ?? ""), cost: Number(t?.costUsd) }))
+		.filter((t) => Number.isFinite(t.at) && Number.isFinite(t.cost));
+	const out: QuotaWindow[] = [];
+	for (const w of CLINE_WINDOWS) {
+		const cap = Number(caps[w.cap]);
+		if (!(cap > 0) || !Number.isFinite(cap)) continue;
+		const cut = now - w.ms;
+		const used = txns.filter((t) => t.at >= cut).reduce((s, t) => s + t.cost, 0);
+		const usedPct = Math.max(0, Math.min(100, (used / cap) * 100));
+		out.push({ label: w.label, remainPct: Math.max(0, Math.min(100, 100 - usedPct)), resetsAt: 0 });
+	}
+	return out;
+}
+
+/**
  * opencode.ai/zen/go/v1/usage 의 usage 창 — OpenCode Go 5h/7d/30d(monthly).
  * 이 엔드포인트는 `percent` 를 **사용률**로 보낸다(다른 둘과 반대) — 여기서 뒤집는다.
  */
