@@ -5,13 +5,21 @@
  *  - @wierdbytes/pi-statusline (base UI: model / path / git / context / cost / tokens)
  *  - @latentminds/pi-quotas (realtime quota fetch: Anthropic 5h/7d, Codex 5h/7d, OpenCode Go 5h/7d/monthly)
  *
+ * 0.2.23: Cline 게이지를 pi-cline-bridge 에 연결. 핵심은 토큰이다 — Cline 의 OAuth
+ *   refresh token 은 회전해서 디스크의 저장 토큰은 이미 무효인 경우가 대부분이고,
+ *   statusline 이 직접 갱신하면 그 토큰을 쓰고 있는 pi-cline-bridge 와 `cline` CLI 의
+ *   다음 요청이 401 로 실패한다. 그래서 **bridge 가 갱신해 둔 키를 읽기만 한다**
+ *   (~/.cline/data/bridge-token.json). 어느 쪽도 갱신을 두 번 하지 않는다.
+ *   pi-clinepass-provider 전용 토큰 소스(~/.pi/agent/auth.json, modelRegistry)는
+ *   제거했다 — bridge 가 그 자리를 대신한다.
+ *
  * 0.2.22: ClinePass(pi-clinepass-provider) 구독 5h/7d/30d 게이지 — api.cline.bot 의
  *   /api/v1/users/me/plan/usage-limits 를 그대로 쓴다(서버가 percentUsed + resetsAt 를
  *   계산해서 줌). 처음에 plan 한도 + usages 거래를 클라에서 합성했으나 비구독 사용량까지
  *   끌어와 홈페이지와 안 맞았다(18% vs 0%) — 단일 엔드포인트가 정답.
- *   **토큰은 읽기만** — WorkOS refresh token 이 단회용(회전)이라 statusline 이 갱신하면
- *   pi-clinepass-provider 의 다음 갱신이 실패한다. 그래서 ~/.pi/agent/auth.json(clinepass)
- *   / ~/.cline 의 OAuth 토큰을 만료 임박이면 건너뛰고 다음 tick 에 다시 잡는다.
+ *   **토큰은 읽기만** — refresh token 이 회전하므로 statusline 이 갱신하면 그 토큰을
+ *   쓰는 다른 프로세스의 다음 갱신이 실패한다. 0.2.23 에서 이 읽기 전용 규칙은
+ *   bridge 가 발행한 키를 읹는 것으로 지켜진다.
  * 0.2.21: 컨텍스트 캡 어휘를 max/slim 으로 — /ctx max = **그 세션만** Codex
  *   실창(1.05M), /ctx slim = 현행과 같은 272k 자동 compact(기본). 창을 바꾸는 건
  *   pi 의 compact 판정이 `contextWindow - reserveTokens` 하나로 돌기 때문.
@@ -32,6 +40,7 @@
  */
 
 import { cacheRatio, cacheReadLabel, cacheReadSuffix, cacheTone, cachePaint, colorForTone, GOOD_OPTIONS } from "../src/cache-segment.ts";
+import { pickClineToken } from "../src/cline-token.ts";
 import { clineWindows, codexWindows, opencodeWindows, toMs } from "../src/quota-windows.ts";
 import { CTX_TTL_MS, snapshotKey, staleNames, type CtxEntry } from "../src/ctx-snapshot.ts";
 import { CTX_CAP_FILE, CTX_CAP_ENTRY, capChipLabel, describeConfig, fmt, parseCapToken, parseConfig, releasedFromEntries, resolveWindow, type CtxCapConfig } from "../src/ctx-cap.ts";
@@ -142,6 +151,7 @@ function providerLabel(p?: string): string {
     cerebras: "Cerebras",
     clinepass: "ClinePass",
     cline: "Cline",
+    "cline-bridge": "Cline",
     nvidia: "NVIDIA",
     openrouter: "OpenRouter",
     "github-copilot": "Copilot",
@@ -337,26 +347,19 @@ function opencodeGoConfig(): { workspaceId: string; authCookie: string } | null 
   return null;
 }
 
-// ClinePass(pi-clinepass-provider)/Cline(built-in) 구독 사용량 — https://api.cline.bot.
-// pi-clinepass-provider 는 WorkOS OAuth 토큰을 ~/.pi/agent/auth.json(clinepass) 및
-// ~/.cline/data/settings/providers.json(providers["cline-pass"|"cline"].settings.auth) 에
-// 저장한다. **우리는 그 토큰을 읽기만 한다** — WorkOS refresh token 은 단회용(회전)이라
-// statusline 이 /api/v1/auth/refresh 를 직접 부르면 pi-clinepass-provider 의 다음 갱신이
-// "already exchanged" 로 실패한다(실측). 만료 임박 토큰은 건너뛰고, 다음 completion 이
-// pi 를 갱신시킬 때까지 기다린다(≤60s tick 이 다시 집는다).
+// Cline 구독 사용량 — https://api.cline.bot. pi-cline-bridge 와 `cline` CLI 는
+// ~/.cline/data/settings/providers.json(providers["cline-pass"|"cline"].settings.auth)
+// 에 저장된 OAuth 토큰을 공유한다. **우리는 그 토큰을 읽기만 한다** — Cline 의 refresh
+// token 은 회전하기 때문에 statusline 이 갱신을 직접 시도하면 토큰을 쓰는 다른 프로세스의
+// 다음 요청이 401 로 실패한다(실측). 만료 임박 토큰은 건너뛰고, 다음 completion 이
+// 갱신시킬 때까지 기다린다(≤60s tick 이 다시 집는다).
 const CLINE_API_BASE = process.env.CLINE_API_BASE?.trim() || "https://api.cline.bot";
-const CLINE_TOKEN_FRESH_MS = 60_000;
 function clineStoredCredentials(): { access?: string; expires?: number } {
   const pick = (o: any): { access?: string; expires?: number } | undefined => {
     const access = o?.access ?? o?.key ?? o?.apiKey;
     if (typeof access !== "string" || !access) return undefined;
     return { access, expires: Number(o?.expires) || undefined };
   };
-  const auth = readJson(join(homedir(), ".pi", "agent", "auth.json"));
-  for (const k of ["clinepass", "cline"]) {
-    const got = pick(auth?.[k]);
-    if (got) return got;
-  }
   const cli = readJson(join(homedir(), ".cline", "data", "settings", "providers.json"));
   const providers = cli?.providers;
   for (const k of ["cline-pass", "cline"]) {
@@ -366,21 +369,15 @@ function clineStoredCredentials(): { access?: string; expires?: number } {
   }
   return {};
 }
-async function clinepassToken(ctx: ExtensionContext): Promise<string | undefined> {
-  // 1) pi modelRegistry — pi 가 갱신한 인메모리 토큰(가장 최신일 수 있다)
-  for (const name of ["clinepass", "cline"]) {
-    try {
-      const r: any = ctx.modelRegistry as any;
-      const t = await r?.authStorage?.getApiKey?.(name) ?? await r?.getApiKeyForProvider?.(name);
-      if (typeof t === "string" && t) { const ex = expandCommandRef(t); if (ex) return ex; }
-    } catch { /* next source */ }
-  }
-  // 2) 저장소의 WorkOS 토큰 — 만료 임박이면 사용하지 않는다(갱신은 pi 의 몫)
-  const { access, expires } = clineStoredCredentials();
-  if (access && (!expires || expires > Date.now() + CLINE_TOKEN_FRESH_MS)) return access;
-  // 3) 정적 API 키(env; usage-billing 용 — 구독 한도가 없으면 게이지가 안 뜬다)
-  if (process.env.CLINE_API_KEY?.trim()) return process.env.CLINE_API_KEY.trim();
-  return undefined;
+async function clineToken(): Promise<string | undefined> {
+  // pi-cline-bridge 가 갱신해 둔 키 — 유일하게 '지금 유효한' 키다. Cline 의 저장된
+  //  토큰은 회전을 통해 이미 무효가 된 경우가 많고, statusline 이 직접 갱신하면
+  //  토큰을 쓰는 다른 프로세스(bridge/CLI)의 다음 요청이 401 로 실패한다.
+  return pickClineToken({
+    published: readJson(join(homedir(), ".cline", "data", "bridge-token.json")),
+    stored: clineStoredCredentials(),
+    envApiKey: process.env.CLINE_API_KEY?.trim(),
+  });
 }
 // Cline usage — 서버가 사용률을 직접 계산하는 단일 엔드포인트. 클라이언트가
 // plan(한도)+usages(거래) 를 합성하면 비구독 사용량까지 끌어오므로 쓰지 않는다(실측).
@@ -530,7 +527,7 @@ function saveCtxCap(cfg: CtxCapConfig): void {
 
 // per-provider cache (anthropic 5min, others 60s)
 const quotaCache = new Map<string, QuotaState>();
-const TTL: Record<string, number> = { anthropic: 5 * 60_000, "claude-bridge": 5 * 60_000, "openai-codex": 60_000, "opencode-go": 60_000, clinepass: 60_000, cline: 60_000 };
+const TTL: Record<string, number> = { anthropic: 5 * 60_000, "claude-bridge": 5 * 60_000, "openai-codex": 60_000, "opencode-go": 60_000, "cline-bridge": 60_000, clinepass: 60_000, cline: 60_000 };
 
 async function refreshQuotas(ctx: ExtensionContext, force = false): Promise<QuotaState> {
   const provider = (() => { try { return ctx.model?.provider; } catch { return undefined; } })();
@@ -556,10 +553,10 @@ async function refreshQuotas(ctx: ExtensionContext, force = false): Promise<Quot
     } else if (provider === "opencode" || provider === "opencode-go") {
       state.chips = await fetchOpenCodeGo(ctx);
       if (state.chips.length === 0) state.error = "no-go-config";
-    } else if (provider === "clinepass" || provider === "cline") {
-      // ClinePass(pi-clinepass-provider) 구독: plan(한도) + usages(거래) 합성.
-      // 토큰이 있어도 구독이 없거나 토큰이 만료됐으면 게이지가 안 뜬다(실패가 아니다).
-      const t = await clinepassToken(ctx);
+    } else if (provider === "cline-bridge" || provider === "clinepass" || provider === "cline") {
+      // Cline 구독(pi-cline-bridge, 또는 기본 Cline provider): 서버가 사용률을 직접 계산하는
+      // 단일 엔드포인트. 토큰이 있어도 구독이 없거나 토큰이 만료됐으면 게이지가 안 뜬다(실패가 아니다).
+      const t = await clineToken();
       state.chips = await fetchCline(t);
       if (state.chips.length === 0) state.error = t ? "no-plan" : "no-creds";
     } else {

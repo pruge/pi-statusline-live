@@ -1,7 +1,7 @@
 {
   "name": "pi-statusline-live",
-  "version": "0.2.22",
-  "description": "Realtime pi statusline: wierdbytes-style footer (model/path/git/context/cost/tokens) + live Anthropic 5h/7d, Codex 5h/7d, OpenCode Go 5h/7d/30d, Cline Pass 5h/7d/30d quotas",
+  "version": "0.2.23",
+  "description": "Realtime pi statusline: wierdbytes-style footer (model/path/git/context/cost/tokens) + live Anthropic 5h/7d, Codex 5h/7d, OpenCode Go 5h/7d/30d, Cline 5h/7d/30d quotas (pi-cline-bridge)",
   "type": "module",
   "license": "MIT",
   "author": "pruge",
@@ -42,6 +42,6 @@
   },
   "scripts": {
     "check": "npx --yes esbuild extensions/*.ts --outdir=/tmp/pi-statusline-check --log-level=warning",
-    "test": "node src/cache-segment.test.mjs && node src/ctx-snapshot.test.mjs && node src/ctx-cap.test.mjs && node src/quota-windows.test.mjs"
+    "test": "node src/cache-segment.test.mjs && node src/ctx-snapshot.test.mjs && node src/ctx-cap.test.mjs && node src/quota-windows.test.mjs && node src/cline-token.test.mjs"
   }
 }
