@@ -41,7 +41,7 @@
 
 import { cacheRatio, cacheReadLabel, cacheReadSuffix, cacheTone, cachePaint, colorForTone, GOOD_OPTIONS } from "../src/cache-segment.ts";
 import { pickClineToken } from "../src/cline-token.ts";
-import { clineWindows, codexWindows, opencodeWindows, toMs } from "../src/quota-windows.ts";
+import { clineWindows, codexWindows, minimaxWindows, opencodeWindows, toMs } from "../src/quota-windows.ts";
 import { CTX_TTL_MS, snapshotKey, staleNames, type CtxEntry } from "../src/ctx-snapshot.ts";
 import { CTX_CAP_FILE, CTX_CAP_ENTRY, capChipLabel, describeConfig, fmt, parseCapToken, parseConfig, releasedFromEntries, resolveWindow, type CtxCapConfig } from "../src/ctx-cap.ts";
 import { detectColorMode, downgradeAnsi, foldLines, paintLiteral } from "../src/ansi.ts";
@@ -456,6 +456,24 @@ async function fetchOpenCodeGo(ctx?: ExtensionContext): Promise<QuotaChip[]> {
   if (mo) out.push({ label: "30d", remainPct: Math.max(0, 100 - mo.pct), resetsAt: Date.now() + Math.max(0, mo.resetSec) * 1000 });
   return out;
 }
+// MiniMax Token Plan 5h/7d — `mmx quota show --output json --quiet --non-interactive` 를
+// 그대로 실행한다. CLI 가 Akamai/쿠키/세션 갱신을 다 처리하므로 statusline 은 응답만 해석한다.
+// 쿠키를 절대 만지지 않는다 — MiniMax OAuth 토큰은 회전하므로 statusline 이 직접 갱신하면
+// 그 토큰을 쓰는 다음 CLI 호출이 401 로 실패한다(다른 provider 와 같은 규율).
+// mmx 미설치/로그아웃/네트워크 오류 → 빈 배열(게이지 없음, 에러 상태로 표시).
+async function fetchMiniMax(): Promise<QuotaChip[]> {
+  let raw: string;
+  try {
+    raw = execFileSync("mmx", ["quota", "show", "--output", "json", "--quiet", "--non-interactive"],
+      { timeout: 10_000, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+  } catch {
+    return []; // ENOENT / non-zero exit / timeout — 그이지 없음
+  }
+  let payload: any;
+  try { payload = JSON.parse(raw); } catch { return []; }
+  if (payload?.base_resp?.status_code !== 0) return [];
+  return minimaxWindows(payload);
+}
 
 // ── ctx snapshot: 중앙 레지스트리 ~/.pi/agent/ctx-sessions/<pane|session|pid>.json ──
 // orch(tf_status·idle 워치)가 읽는다. 쓰기: turn_end·model_select·60s tick. prune: 쓸 때마다
@@ -527,7 +545,7 @@ function saveCtxCap(cfg: CtxCapConfig): void {
 
 // per-provider cache (anthropic 5min, others 60s)
 const quotaCache = new Map<string, QuotaState>();
-const TTL: Record<string, number> = { anthropic: 5 * 60_000, "claude-bridge": 5 * 60_000, "openai-codex": 60_000, "opencode-go": 60_000, "cline-bridge": 60_000, clinepass: 60_000, cline: 60_000 };
+const TTL: Record<string, number> = { anthropic: 5 * 60_000, "claude-bridge": 5 * 60_000, "openai-codex": 60_000, "opencode-go": 60_000, "cline-bridge": 60_000, clinepass: 60_000, cline: 60_000, minimax: 60_000, "minimax-cn": 60_000 };
 
 async function refreshQuotas(ctx: ExtensionContext, force = false): Promise<QuotaState> {
   const provider = (() => { try { return ctx.model?.provider; } catch { return undefined; } })();
@@ -553,6 +571,9 @@ async function refreshQuotas(ctx: ExtensionContext, force = false): Promise<Quot
     } else if (provider === "opencode" || provider === "opencode-go") {
       state.chips = await fetchOpenCodeGo(ctx);
       if (state.chips.length === 0) state.error = "no-go-config";
+    } else if (provider === "minimax" || provider === "minimax-cn") {
+      state.chips = await fetchMiniMax();
+      if (state.chips.length === 0) state.error = "no-mmx";
     } else if (provider === "cline-bridge" || provider === "clinepass" || provider === "cline") {
       // Cline 구독(pi-cline-bridge, 또는 기본 Cline provider): 서버가 사용률을 직접 계산하는
       // 단일 엔드포인트. 토큰이 있어도 구독이 없거나 토큰이 만료됐으면 게이지가 안 뜬다(실패가 아니다).

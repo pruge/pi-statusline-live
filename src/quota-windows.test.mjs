@@ -1,7 +1,7 @@
 // quota-windows 계약 테스트 — 실측 payload 모양 고정. Run: node src/quota-windows.test.mjs
 import test from "node:test";
 import assert from "node:assert/strict";
-import { clineWindows, codexWindows, opencodeWindows, toMs } from "./quota-windows.ts";
+import { clineWindows, codexWindows, minimaxWindows, opencodeWindows, toMs } from "./quota-windows.ts";
 
 // 2026-09-17 실측(GET chatgpt.com/backend-api/wham/usage, HTTP 200). id/email 만 가림.
 const CODEX_LIVE = {
@@ -114,6 +114,62 @@ test("clineWindows — 모르는 type 이나 비정수 percentUsed 면 그 창�
 		{ type: "weekly", percentUsed: "n/a", resetsAt: "2026-09-26T08:17:50Z" }, // 비정수
 	] } });
 	assert.deepEqual(out.map((w) => w.label), ["5h"]);
+});
+
+// 2026-09-20 실측(`mmx quota show --output json --quiet`, exit 0). 토큰은 응답에 안 들어온다.
+// server 가 **남은 퍼센트**를 그대로 보낸다(codex/opencode/cline 와 반대) — 여기서 뒤집지 않는다.
+const MINIMAX_LIVE = {
+	model_remains: [
+		{
+			model_name: "general",                       // 텍스트 모델
+			current_interval_status: 1,                  // 1=활성
+			current_interval_remaining_percent: 97,       // 5h 남은 %
+			start_time: 1789898400000,
+			end_time: 1789916400000,                     // 5h 리셋 시각(ms)
+			current_weekly_status: 1,
+			current_weekly_remaining_percent: 99,         // 7d 남은 %
+			weekly_start_time: 1789344000000,
+			weekly_end_time: 1789948800000,              // 7d 리셋 시각(ms)
+		},
+		{
+			model_name: "video",                         // video 모델은 statusline 대상 아님(텍스트만)
+			current_interval_status: 3,                  // 3=이 모델엔 quota 없음(스킵)
+			current_interval_remaining_percent: 100,
+			current_weekly_status: 3,
+			current_weekly_remaining_percent: 100,
+		},
+	],
+	base_resp: { status_code: 0, status_msg: "success" },
+};
+
+test("minimaxWindows — general 항목의 활성(1) 5h/7d 만 게이지로 올리고 video(status 3)는 건너뛴다", () => {
+	assert.deepEqual(minimaxWindows(MINIMAX_LIVE), [
+		{ label: "5h", remainPct: 97, resetsAt: 1789916400000 },
+		{ label: "7d", remainPct: 99, resetsAt: 1789948800000 },
+	]);
+});
+
+test("minimaxWindows — model_remains 가 없거나 비어있거나 배열이 아니면 빈 배열(게이지 없음)", () => {
+	assert.deepEqual(minimaxWindows({}), []);
+	assert.deepEqual(minimaxWindows({ model_remains: [] }), []);
+	assert.deepEqual(minimaxWindows({ model_remains: "not-an-array" }), []);
+});
+
+test("minimaxWindows — video 만 있거나 general 항목이 없으면 빈 배열(텍스트 모델만 본다)", () => {
+	assert.deepEqual(minimaxWindows({ model_remains: [{ model_name: "video", current_interval_status: 3 }] }), []);
+	assert.deepEqual(minimaxWindows({ model_remains: [{ model_name: "speech" }] }), []);
+});
+
+test("minimaxWindows — 범위 밖 퍼센트는 0..100 으로 자르고 status 가 1 이 아니면 그 창만 스킵", () => {
+	const out = minimaxWindows({ model_remains: [{
+		model_name: "general",
+		current_interval_status: 3,                  // 5h 비활성(스킵)
+		current_interval_remaining_percent: 200,
+		current_weekly_status: 1,
+		current_weekly_remaining_percent: -5,        // → 0 으로 클램프
+		weekly_end_time: 1789948800000,
+	}] });
+	assert.deepEqual(out, [{ label: "7d", remainPct: 0, resetsAt: 1789948800000 }]);
 });
 
 

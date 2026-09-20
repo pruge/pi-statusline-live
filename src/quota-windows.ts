@@ -74,6 +74,44 @@ export function clineWindows(payload: unknown): QuotaWindow[] {
 }
 
 /**
+ * mmx quota show 의 model_remains[] 안의 한 항목. 텍스트 모델은 `model_name: "general"` 항목에
+ * 있고, video 등 다른 모델은 `current_interval_status: 3` 으로 들어온다(스킵). 우리는 텍스트
+ * 모델만 본다(pi 는 텍스트 모델만 쓴다).
+ *
+ *   {
+ *     model_name: "general",                          // 텍스트 모델
+ *     current_interval_remaining_percent: 0..100,     // 5h 남은 %
+ *     current_interval_status: 1,                     // 1=활성, 3=무관(스킵)
+ *     end_time: ms,                                   // 5h 리셋 절대 시각
+ *     current_weekly_remaining_percent: 0..100,       // 7d 남은 %
+ *     current_weekly_status: 1,
+ *     weekly_end_time: ms,                            // 7d 리셋 절대 시각
+ *   }
+ *
+ * server 는 **남은 퍼센트**를 그대로 보낸다(codex/opencode 와 반대). 여기서 뒤집지 않는다.
+ */
+const MINIMAX_ACTIVE_STATUS = 1;
+
+export function minimaxWindows(payload: unknown): QuotaWindow[] {
+	const remains = ((payload as any)?.model_remains ?? []) as any[];
+	if (!Array.isArray(remains)) return [];
+	const out: QuotaWindow[] = [];
+	for (const r of remains) {
+		if (r?.model_name !== "general") continue; // 텍스트 모델만 본다
+		const add = (label: QuotaWindow["label"], remain: unknown, status: unknown, endTime: unknown) => {
+			if (Number(status) !== MINIMAX_ACTIVE_STATUS) return;
+			const pct = Number(remain);
+			if (!Number.isFinite(pct)) return;
+			const reset = Number(endTime);
+			out.push({ label, remainPct: Math.max(0, Math.min(100, pct)), resetsAt: Number.isFinite(reset) ? reset : 0 });
+		};
+		add("5h", r.current_interval_remaining_percent, r.current_interval_status, r.end_time);
+		add("7d", r.current_weekly_remaining_percent, r.current_weekly_status, r.weekly_end_time);
+	}
+	return out;
+}
+
+/**
  * opencode.ai/zen/go/v1/usage 의 usage 창 — OpenCode Go 5h/7d/30d(monthly).
  * 이 엔드포인트는 `percent` 를 **사용률**로 보낸다(다른 둘과 반대) — 여기서 뒤집는다.
  */
