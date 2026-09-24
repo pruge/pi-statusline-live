@@ -48,9 +48,77 @@ import { detectColorMode, downgradeAnsi, foldLines, paintLiteral } from "../src/
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, watch, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
+
+// ── session title (pi-title 이 쓴 미러 읽기 — 패키지 간 import 금지라 복제) ──
+// dir: ~/.pi/agent/session-titles/ · file: <key>.json · shape: { v:1, title, at }
+// key = HERDR_PANE_ID ?? PI_SESSION_ID ?? pid-<pid> (ctx-snapshot.snapshotKey 와 동일식).
+const ANSI_TITLE_RE = /\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*(?:\x07|\x1b\\)|\x1b[PX^_][^\x1b]*\x1b\\/g;
+function sanitizeTitleKey(k: string): string {
+	return String(k ?? "").replace(/[^A-Za-z0-9_.:#-]/g, "-").slice(0, 128) || "unknown";
+}
+function titleFileKey(env: NodeJS.ProcessEnv = process.env): string {
+	const k = env.HERDR_PANE_ID?.trim() || env.PI_SESSION_ID?.trim() || `pid-${process.pid}`;
+	return sanitizeTitleKey(k);
+}
+/** 이 세션의 타이틀. 없으면 "" — spawn 없이 fs 직접, render 폴링에 안전. */
+function readSessionTitle(env: NodeJS.ProcessEnv = process.env): string {
+	try {
+		const p = join(homedir(), ".pi", "agent", "session-titles", `${titleFileKey(env)}.json`);
+		if (!existsSync(p)) return "";
+		const v = JSON.parse(readFileSync(p, "utf8")) as Record<string, unknown>;
+		const t = typeof v?.title === "string" ? v.title : "";
+		return t.replace(/\s+/g, " ").trim().slice(0, 40).trim();
+	} catch { return ""; }
+}
+function stripAnsiForTitleWidth(s: string): string {
+	return s.replace(ANSI_TITLE_RE, "");
+}
+/** 터미널이 2칸으로 그리는 Emoji·심볼 범위 — pi-tui visibleWidth와 일치. */
+function isWide2(codePoint: number): boolean {
+	return (codePoint >= 0x2600 && codePoint <= 0x27BF) ||
+		(codePoint >= 0x2B50 && codePoint <= 0x2B55) ||
+		(codePoint >= 0x1F000 && codePoint <= 0x1F9FF) ||
+		(codePoint >= 0xFE00 && codePoint <= 0xFE0F);
+}
+/** 표시 폭 — 한글·CJK·이모지는 2칸. 우측 끝 정렬의 자릿수 계산용. */
+function titleDisplayWidth(s: string): number {
+	const t = stripAnsiForTitleWidth(s);
+	let w = 0;
+	for (const ch of t) {
+		const c = ch.codePointAt(0) ?? 0;
+		w += c >= 0x1100 && (c <= 0x115f || c === 0x2329 || c === 0x232a ||
+			(c >= 0x2e80 && c <= 0xa4cf) ||
+			(c >= 0xac00 && c <= 0xd7a3) ||
+			(c >= 0xf900 && c <= 0xfaff) ||
+			(c >= 0xfe30 && c <= 0xfe4f) ||
+			(c >= 0xff00 && c <= 0xff60) ||
+			(c >= 0xffe0 && c <= 0xffe6) ||
+			(c >= 0x20000 && c <= 0x3fffd) ||
+			isWide2(c)) ? 2 : 1;
+	}
+	return w;
+}
+/**
+ * 푸터 첫 줄 우측 끝 정렬 — `row + 공백 + ✎ title` 이 width 칸에 딱 맞는다.
+ * row 는 이미 truncate 된 ANSI 문자열. 좁으면 row 를 잘라 타이틀 자리를 만든다
+ * (타이틀이 잘리면 명패가 아니다). 타이틀이 없으면 입력을 그대로 돌려준다.
+ */
+function titleRightAligned(row: string, title: string, width: number): string {
+	const t = String(title ?? "").replace(/\s+/g, " ").trim().slice(0, 40).trim();
+	if (!t || width <= 0) return row;
+	const suffix = `✎ ${t}`;
+	const sw = titleDisplayWidth(suffix);
+	const rw = titleDisplayWidth(row);
+	const gap = width - rw - sw;
+	if (gap >= 1) return row + " ".repeat(gap) + suffix;
+	// 좁음: 타이틀 폭 + 공백 1칸을 남기고 row 를 자른다(ANSI 안전).
+	const room = Math.max(0, width - sw - 1);
+	const cut = truncateToWidth(row, Math.max(0, room - 1) || 0);
+	return (cut ? cut + " " : "") + suffix;
+}
 
 // ── config ──
 const REFRESH_MS = 60_000;
@@ -549,10 +617,23 @@ const TTL: Record<string, number> = { anthropic: 5 * 60_000, "claude-bridge": 5 
 
 async function refreshQuotas(ctx: ExtensionContext, force = false): Promise<QuotaState> {
   const provider = (() => { try { return ctx.model?.provider; } catch { return undefined; } })();
-  const key = provider ?? "none";
+  const modelId = (() => { try { return ctx.model?.id ?? ""; } catch { return ""; } })();
+  const isCline = provider === "cline-bridge" || provider === "clinepass" || provider === "cline";
+  // 무료 모델(pi id `-free` suffix, 예: deepseek-v4.1-flash-free)은 구독 쿼터를
+  // 소모하지 않으므로 5h/7d/30d 게이지를 띄우지 않는다. usage-limits 는 플랜 단위라
+  // 모델 무관하게 같은 값을 돌려줘서, 띄우면 오해만 유발한다.
+  const isFreeModel = isCline && modelId.endsWith("-free");
+  const baseKey = provider ?? "none";
+  const key = isCline ? `${baseKey}:${isFreeModel ? "free" : "paid"}` : baseKey;
   const now = Date.now();
   const cached = quotaCache.get(key);
-  if (!force && cached && now - cached.at < (TTL[key] ?? 60_000)) return cached;
+  if (!force && cached && now - cached.at < (TTL[baseKey] ?? 60_000)) return cached;
+
+  if (isFreeModel) {
+    const freeState: QuotaState = { at: Date.now(), chips: [], provider, error: "free-model" };
+    quotaCache.set(key, freeState);
+    return freeState;
+  }
 
   let state: QuotaState = { at: now, chips: [], provider };
   try {
@@ -741,6 +822,32 @@ export default function (pi: ExtensionAPI) {
   let toolName = "";
   let thinkLevel = "";
   let tick = 0;
+  // session-title watch — /title 은 turn 없이 실행돼 turn_end 가 안 온다.
+  // pi-title 은 tmp+rename 원자 쓰기라 디렉터리를 본다. spawn 없이 fs 직접.
+  let titleWatch: ReturnType<typeof watch> | null = null;
+  let titleWatchTimer: ReturnType<typeof setTimeout> | null = null;
+  function watchTitles(ctx: ExtensionContext) {
+    if (titleWatch) return;
+    try {
+      const dir = join(homedir(), ".pi", "agent", "session-titles");
+      if (!existsSync(dir)) return;
+      const key = `${titleFileKey()}.json`;
+      const w = watch(dir, (_ev, name) => {
+        if (String(name ?? "") !== key) return; // 남의 pane 타이틀에 흔들리지 않는다
+        if (titleWatchTimer) clearTimeout(titleWatchTimer);
+        titleWatchTimer = setTimeout(() => { titleWatchTimer = null; currentCtx = ctx; repaint(); }, 120);
+      });
+      w.on("error", () => { try { w.close(); } catch { /* ignore */ } if (titleWatch === w) titleWatch = null; });
+      (w as unknown as { unref?: () => void }).unref?.();
+      titleWatch = w;
+    } catch { /* watch 실패는 60s tick + turn_end 로 — 조용히 있는다 */ }
+  }
+  function stopTitleWatch() {
+    try { if (titleWatchTimer) clearTimeout(titleWatchTimer); } catch { /* ignore */ }
+    titleWatchTimer = null;
+    try { titleWatch?.close(); } catch { /* ignore */ }
+    titleWatch = null;
+  }
 
   function repaint() {
     try { tuiRef?.requestRender(); } catch { /* ignore */ }
@@ -808,6 +915,7 @@ export default function (pi: ExtensionAPI) {
   function installFooter(ctx: ExtensionContext) {
     currentCtx = ctx;
     syncThinkLevel(ctx);
+    watchTitles(ctx); // /title 은 turn 없이 실행돼 turn_end 가 안 온다 — 미러를 직접 본다
     ctx.ui.setFooter((tui: any, _theme: any, footerData: any) => {
       tuiRef = tui as unknown as { requestRender(): void };
       const unsub = footerData?.onBranchChange?.(() => repaint());
@@ -816,7 +924,16 @@ export default function (pi: ExtensionAPI) {
         invalidate() {},
         render(width: number): string[] {
           syncThinkLevel(ctx);
-          return renderLine(ctx, width, quota, phase, toolName, thinkLevel, tick, capChipFor(ctx));
+          const lines = renderLine(ctx, width, quota, phase, toolName, thinkLevel, tick, capChipFor(ctx));
+          // 세션 타이틀 → 첫 줄 우측 끝. 없으면 lines 그대로(바이트 동일).
+          try {
+            const title = readSessionTitle();
+            if (title && lines.length) {
+              const first = titleRightAligned(lines[0], title, width);
+              lines[0] = downgradeAnsi(first, resolveColorMode());
+            }
+          } catch { /* 타이틀 실패는 푸터를 깨지 않는다 */ }
+          return lines;
         },
       };
     });
@@ -900,6 +1017,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_shutdown", async () => {
     removeCtxSnapshot();
     stopTimers();
+    stopTitleWatch();
     setPhase("idle");
     currentCtx = undefined;
     // Release singleton so the reloaded extension can take over the footer.
