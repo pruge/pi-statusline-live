@@ -53,7 +53,7 @@ pi -e github.com/pruge/pi-statusline-live
 | `⚡Codex 5h 7d` | OpenAI Codex (`chatgpt.com/backend-api/wham/usage`), `rate_limit` 의 5h/7d 창, used % + reset |
 | `⚡OpenCode Go 5h 7d 30d` | OpenCode Go API key (`/zen/go/v1/usage`; dashboard scrape as fallback). `rolling`/`weekly`/`monthly` → `5h`/`7d`/`30d` gauges |
 | `⚡Cline 5h 7d 30d` | ClinePass subscription — `api.cline.bot` `/api/v1/users/me/plan/usage-limits` gives the server-computed `percentUsed` + `resetsAt` per window (five_hour/weekly/monthly). One call, no client-side synthesis |
-| `context` cap | `/ctx max` opens the active model's real window (1.05M) for that session; `/ctx slim` keeps the 272k auto-compact cap |
+| `context` cap | `/ctx max` opens the active model's real window for this session+model; `/ctx slim` keeps the 272k auto-compact cap (default, every model) |
 
 ## Commands
 
@@ -62,60 +62,67 @@ pi -e github.com/pruge/pi-statusline-live
 /live-status refresh  — force quota refetch now
 /live-status on|off   — toggle custom footer (off = native footer back)
 
-/ctx                  — context cap status (this session's max/slim mode + effective window)
-/ctx max              — use the real window (1.05M) in THIS session only
-/ctx slim             — back to the 272k cap in THIS session (default)
-/ctx toggle           — flip max ↔ slim
+/ctx                  — context cap status (this session+model's max/slim mode + effective window)
+/ctx max              — use this model's real window in THIS session only (per model)
+/ctx slim             — back to the 272k cap in THIS session (default, every model)
+/ctx toggle           — flip max ↔ slim for the active model
 /ctx slim <272k|300k|1m>  — set the GLOBAL default cap (every session) and go slim here
 ```
 
-## Context cap (`/ctx`) — max / slim, per session
+## Context cap (`/ctx`) — max / slim, every model, per session+model
 
 pi decides auto-compaction with `contextTokens > model.contextWindow - reserveTokens`,
 so the model's **context window** is the only lever that moves the compaction point.
 Raising `compaction.reserveTokens` instead would be global (every model compacts every
 turn) and would blow the summary output cap up to 128k (`0.8 * reserveTokens`, capped at
-`maxTokens`) — so this extension edits the window, per model, at runtime via `pi.setModel`.
+`maxTokens`) — so this extension edits the window at runtime via `pi.setModel`.
 
-OpenAI/Codex `gpt-5.x` sits in the catalogue at the short-context tier `272000` while the
-real window is `1050000`. **slim** (272k cap) is the default for every session; **max**
-is per session — `/ctx max` in the one session you want, and the other sessions stay slim.
+**slim = min(cap, full)** · **max = full**, where `full` is the catalogue window unless a
+provider override says otherwise. Applies to **every model**: a 1M catalogue window
+(anthropic, cline, opencode, …) compacts at 272k in slim and opens to its real window on
+`/ctx max`. Catalogue windows below the cap (e.g. haiku 200k, spark 128k) are never
+touched — slim and max are the same there, so no chip either.
 
-- **slim** (every session by default): `contextWindow = 272000`, auto-compact ~272k (unchanged behaviour)
-- **max** (that session only): `contextWindow = 1050000`, auto-compact ~1.03M
+- **slim** (default for every session and every model): `contextWindow = min(cap, full)`,
+  auto-compact at `cap − reserveTokens` (~256k with the default 272k cap)
+- **max** (this session **and** this model only): `contextWindow = full` (catalogue window,
+  or the provider override — codex `gpt-5.x` catalogue says 272k, real window is 1.05M)
 
 Two layers make that work:
 
 | Layer | Where | Scope |
 |---|---|---|
-| cap + target providers | `~/.pi/agent/ctx-window.json` | every session (the default) |
-| `released` switch | `pi.appendEntry("ctx-cap", …)` inside the session file | just that session |
+| cap + catalogue-override map | `~/.pi/agent/ctx-window.json` | every session (the default) |
+| per-model max/slim snapshot | `pi.appendEntry("ctx-cap", { states })` in the session file | just that session |
 
-The max switch survives `/reload` and `--resume` of that session (restored from its own
-entries) and never leaks to another session.
+`states` is `{ "provider/modelId": true|false }` — last snapshot wins, unrecorded models
+are slim. The choice survives `/reload` and `--resume` of that session and never leaks to
+another session. Old sessions that only stored a session-wide `{ released }` flag still
+read that flag until the first `/ctx` writes a `states` snapshot.
 
 The footer says which mode you are in, next to the context gauge — the chip is
 `🔒slim` (dim) while capped and `🔓max` (bold warning) once open, and the window
-denominator flips `272k` ↔ `1.1M` with it:
+denominator flips `272k` ↔ the real window with it:
 
 ```
 ○ idle │ 🤖 gpt-5.6-sol 🧠 high │ ⚡Codex … │ 🔒slim 24% ▓▓ 65k/272k │ …   # slim (default)
 ○ idle │ 🤖 gpt-5.6-sol 🧠 high │ ⚡Codex … │ 🔓max 6% ▓ 65k/1.1M │ …     # /ctx max
+○ idle │ 🤖 deepseek-v4.1-flash 🧠 high │ ⚡Cline … │ 🔒slim 8% ▓ 80k/272k │ …  # 1M model, slim
 ```
 
 It repaints on the command itself (no need to wait for the next model response), and the
-ctx snapshot for orchestrators is rewritten at the same moment. Non-target providers get
-no chip.
+ctx snapshot for orchestrators is rewritten at the same moment. Models whose full window
+is at or below the cap get no chip (slim ≡ max).
 
 ```json
 { "v": 1, "cap": 272000, "providers": { "openai-codex": 1050000 } }
 ```
 
-Add another provider/real-window pair to `providers` to cap it too. Models whose catalogue
-window is smaller than the cap (e.g. `gpt-5.3-codex-spark` 128k) and other providers are
-never touched. With the cap on and the catalogue already at 272k, no `pi.setModel` call
-happens at all (no session churn); turning 1M on leaves one `model_change` + one `ctx-cap`
-entry in that one session.
+`providers` only holds **overrides** for catalogue under-reports (codex gpt-5.x: catalogue
+272k, real 1.05M) — every other model uses its catalogue window as `full`. With the cap on
+and the catalogue already at 272k, no `pi.setModel` call happens at all (no session
+churn); opening max on a 1M model leaves one `model_change` + one `ctx-cap` entry in that
+one session.
 
 ## Ctx registry (for orchestrators)
 
