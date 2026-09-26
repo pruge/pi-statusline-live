@@ -36,18 +36,17 @@
 import { cacheRatio, cacheReadLabel, cacheReadSuffix, cacheTone, cachePaint, colorForTone, GOOD_OPTIONS } from "../src/cache-segment.ts";
 import { pickClineToken } from "../src/cline-token.ts";
 import { clineWindows, codexWindows, minimaxWindows, opencodeWindows, toMs } from "../src/quota-windows.ts";
-import { CTX_TTL_MS, snapshotKey, staleNames, type CtxEntry } from "../src/ctx-snapshot.ts";
 import { detectColorMode, downgradeAnsi, foldLines, paintLiteral } from "../src/ansi.ts";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, watch, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, watch } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 
 // ── session title (pi-title 이 쓴 미러 읽기 — 패키지 간 import 금지라 복제) ──
 // dir: ~/.pi/agent/session-titles/ · file: <key>.json · shape: { v:1, title, at }
-// key = HERDR_PANE_ID ?? PI_SESSION_ID ?? pid-<pid> (ctx-snapshot.snapshotKey 와 동일식).
+// key = HERDR_PANE_ID ?? PI_SESSION_ID ?? pid-<pid> (pi-title 미러와 동일식).
 const ANSI_TITLE_RE = /\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*(?:\x07|\x1b\\)|\x1b[PX^_][^\x1b]*\x1b\\/g;
 function sanitizeTitleKey(k: string): string {
 	return String(k ?? "").replace(/[^A-Za-z0-9_.:#-]/g, "-").slice(0, 128) || "unknown";
@@ -536,50 +535,6 @@ async function fetchMiniMax(): Promise<QuotaChip[]> {
   return minimaxWindows(payload);
 }
 
-// ── ctx snapshot: 중앙 레지스트리 ~/.pi/agent/ctx-sessions/<pane|session|pid>.json ──
-// orch(tf_status·idle 워치)가 읽는다. 쓰기: turn_end·model_select·60s tick. prune: 쓸 때마다
-// TTL(30분) 밖 정리, 끝날 때 자기 파일 삭제. tmp+rename 원자 쓰기, 전부 best-effort(푸터를 못 깨운다).
-function writeCtxSnapshot(ctx: ExtensionContext) {
-  try {
-    let win = 0, cur = 0;
-    try {
-      const u = ctx.getContextUsage();
-      win = u?.contextWindow ?? (ctx as any)?.model?.contextWindow ?? 0;
-      cur = u?.tokens ?? 0;
-    } catch { return; }
-    if (!(win > 0)) return;
-    const dir = join(homedir(), ".pi", "agent", "ctx-sessions");
-    mkdirSync(dir, { recursive: true });
-    const entry: CtxEntry = {
-      v: 1,
-      pane: process.env.HERDR_PANE_ID || undefined,
-      session: process.env.PI_SESSION_ID || undefined,
-      cwd: (() => { try { return ctx.cwd; } catch { return process.cwd(); } })(),
-      model: (() => { try { return shortenModel((ctx as any)?.model); } catch { return undefined; } })(),
-      provider: (() => { try { const p = (ctx as any)?.model?.provider; return typeof p === "string" ? p : undefined; } catch { return undefined; } })(),
-      pct: Math.floor((cur * 100) / win), cur, win, at: new Date().toISOString(),
-    };
-    const file = join(dir, `${snapshotKey()}.json`);
-    const tmp = `${file}.tmp-${process.pid}`;
-    writeFileSync(tmp, JSON.stringify(entry));
-    renameSync(tmp, file);
-    try {
-      const withAt = readdirSync(dir)
-        .filter((f) => f.endsWith(".json") && !f.includes(".tmp-"))
-        .map((f) => {
-          try { return { name: f, at: (JSON.parse(readFileSync(join(dir, f), "utf8")) as any)?.at }; }
-          catch { return { name: f, at: undefined }; }
-        });
-      for (const n of staleNames(withAt, Date.now(), CTX_TTL_MS)) {
-        try { rmSync(join(dir, n), { force: true }); } catch { /* 다음 기회에 */ }
-      }
-    } catch { /* prune 실패는 다음 기회에 */ }
-  } catch { /* 스냅샷은 푸터를 절대 깨지 않는다 */ }
-}
-function removeCtxSnapshot() {
-  try { rmSync(join(homedir(), ".pi", "agent", "ctx-sessions", `${snapshotKey()}.json`), { force: true }); } catch { /* ignore */ }
-}
-
 // per-provider cache (anthropic 5min, others 60s)
 const quotaCache = new Map<string, QuotaState>();
 const TTL: Record<string, number> = { anthropic: 5 * 60_000, "claude-bridge": 5 * 60_000, "openai-codex": 60_000, "opencode-go": 60_000, "cline-bridge": 60_000, clinepass: 60_000, cline: 60_000, minimax: 60_000, "minimax-cn": 60_000 };
@@ -664,6 +619,10 @@ function renderLine(
   const t = ctx.ui.theme;
   const stats = gatherStats(ctx);
   let ctxPct = -1, ctxCur = 0, ctxWin = 0;
+  // Ownership (T06): the window shown here is pi's live session truth —
+  // ctx.getContextUsage() / ctx.model — which pi-ctx has already set via setModel.
+  // This is a one-way read through pi's public API, not a file contract: no
+  // a shared snapshot file, no pi-ctx import, and never write policy here.
   try {
     const u = ctx.getContextUsage();
     if (u) { ctxWin = u.contextWindow ?? ctx.model?.contextWindow ?? 0; ctxCur = u.tokens ?? 0; ctxPct = ctxWin > 0 ? Math.floor((ctxCur * 100) / ctxWin) : -1; }
@@ -864,7 +823,7 @@ export default function (pi: ExtensionAPI) {
 
   function startTimers() {
     if (!timer) {
-      timer = setInterval(() => { void update(false); if (currentCtx) writeCtxSnapshot(currentCtx); }, REFRESH_MS);
+      timer = setInterval(() => { void update(false); }, REFRESH_MS);
       (timer as any)?.unref?.();
     }
     if (!spinTimer) {
@@ -909,19 +868,16 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("turn_end", async (_e, ctx) => {
     currentCtx = ctx;
-    writeCtxSnapshot(ctx);
     void update(false);
   });
 
   pi.on("model_select", async (_e, ctx) => {
     currentCtx = ctx;
     syncThinkLevel(ctx);
-    writeCtxSnapshot(ctx);
     void update(true);
   });
 
   pi.on("session_shutdown", async () => {
-    removeCtxSnapshot();
     stopTimers();
     stopTitleWatch();
     setPhase("idle");

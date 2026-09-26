@@ -1,11 +1,11 @@
 ---
 name: verify-statusline
-description: "Drive pi-statusline-live the way a user does: build check, unit tests, context snapshot contract, and a live quota spot-check. Use when touching extensions/ or src/, or to prove the footer before a release."
+description: "Drive pi-statusline-live the way a user does: build check, unit tests, and a live quota spot-check. Use when touching extensions/ or src/, or to prove the footer before a release."
 ---
 
 # Verify pi-statusline-live
 
-The footer itself needs a visual check inside pi. The build, tests, snapshot contract, and quota endpoint can run headless.
+The footer itself needs a visual check inside pi. The build, tests, and quota endpoint can run headless.
 
 ## Doctor
 
@@ -13,7 +13,7 @@ Read-only:
 
 ```bash
 node --version  # 22+
-ls extensions/live-statusline.ts src/cache-segment.ts src/ctx-snapshot.ts
+ls extensions/live-statusline.ts src/cache-segment.ts
 ```
 
 ## Drive
@@ -22,13 +22,7 @@ Run from the package root:
 
 ```bash
 npm run check  # esbuild, no warnings
-npm test       # cache-segment 53 + ctx-snapshot 3 + quota-windows 16 + cline-token 7
-```
-
-Then check the snapshot file contract:
-
-```bash
-node -e "import('./src/ctx-snapshot.ts').then(m => console.log(m.snapshotKey({HERDR_PANE_ID:'w9B:p1'}), m.CTX_TTL_MS))"
+npm test       # cache-segment 53 + quota-windows 16 + cline-token 7
 ```
 
 Quota endpoint (optional, read-only GET; needs the real key in keychain):
@@ -45,7 +39,7 @@ Inside a fresh pi session, confirm the footer still shows phase, model, provider
 
 ## Evidence
 
-Keep the terminal transcript in `artifacts/verify-statusline/<run>.log` via `tee`. Evidence includes a clean `check`, 79 passing tests, the snapshot key + TTL line, and (if run) a successful quota response with the expected windows.
+Keep the terminal transcript in `artifacts/verify-statusline/<run>.log` via `tee`. Evidence includes a clean `check`, 76 passing tests, and (if run) a successful quota response with the expected windows.
 
 ## Cleanup
 

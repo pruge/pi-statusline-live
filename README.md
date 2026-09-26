@@ -71,15 +71,12 @@ The context gauge reads `ctx.getContextUsage()` and the active model's `contextW
 It does not adjust the model or store slim/max state. Use `pi-ctx` to change the active
 window; the footer then displays the value pi is using.
 
-## Ctx registry (for orchestrators)
+## Ctx ownership (T06)
 
-Every session running this extension snapshots its context to a shared file:
-
-- dir: `~/.pi/agent/ctx-sessions/`, file `<HERDR_PANE_ID ?? PI_SESSION_ID ?? pid>.json`
-- shape: `{ v:1, pane?, session?, cwd, model?, provider?, pct, cur, win, at }`
-- statusline writes on `turn_end` / `model_select` / every 60s tick; `pi-ctx` refreshes after `/ctx` changes; stale entries (30min) pruned on write; own file removed on `session_shutdown`
-
-`pi-ticketflow` reads it (`tf_status` worker detail, idle-watch lines), matching workers by pane (`workerPane`) then worktree cwd. File boundary, no imports — see `src/ctx-snapshot.ts`.
+There is no shared per-session ctx snapshot file anymore. pi-ctx owns context-window policy
+and `/ctx`; this footer reads the live session (`ctx.getContextUsage()` / `ctx.model`)
+via pi's public API and displays it. Removing a consumerless file also removes the
+60s-tick revert race after `/ctx slim`. See `pi-ctx/docs/PLAN.md` T06.
 
 ## Credentials
 
