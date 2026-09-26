@@ -33,6 +33,7 @@
  * model_select / session_start). No dependency on either package — standalone.
  */
 
+import { capChip } from "../src/cap-chip.ts";
 import { cacheRatio, cacheReadLabel, cacheReadSuffix, cacheTone, cachePaint, colorForTone, GOOD_OPTIONS } from "../src/cache-segment.ts";
 import { pickClineToken } from "../src/cline-token.ts";
 import { clineWindows, codexWindows, minimaxWindows, opencodeWindows, toMs } from "../src/quota-windows.ts";
@@ -656,10 +657,21 @@ function renderLine(
     if (g.branch) parts.push(t.fg("accent", g.branch) + " " + (g.dirty ? t.fg("error", "✗") : t.fg("success", "✓")));
   } catch { /* ignore */ }
   parts.push(SPLIT_MARK);
-  // context (fullness signal: green → yellow → red)
+  // context (fullness signal: green → yellow → red), prefixed with the mode chip.
+  // 표시 전용: 세션 모델의 현재 창을 카탈로그 창과 비교해 🔒slim/🔓max 를 말한다.
+  // 정책(pi-ctx)은 읽지 않는다 — pi 가 이미 적용한 창을 다시 그릴 뿐이다.
   if (ctxWin > 0 && ctxPct >= 0) {
+    const native = (() => {
+      try {
+        const m = ctx.model;
+        const w = m ? ctx.modelRegistry.find(m.provider, m.id)?.contextWindow : 0;
+        return typeof w === "number" ? w : 0;
+      } catch { return 0; }
+    })();
+    const chip = capChip(ctxWin, native);
+    const prefix = chip === "slim" ? t.fg("dim", "🔒slim ") : chip === "max" ? t.fg("warning", "🔓max ") : "";
     // Window, percentage, and remaining tokens are one compact context signal.
-    parts.push(gaugePct(t, "ctx", ctxPct) + " " + gaugeBar(t, "ctx", ctxPct) + t.fg("dim", ` ${fmtTokens(ctxCur)}/`) + t.fg("accent", fmtWin(ctxWin)));
+    parts.push(prefix + gaugePct(t, "ctx", ctxPct) + " " + gaugeBar(t, "ctx", ctxPct) + t.fg("dim", ` ${fmtTokens(ctxCur)}/`) + t.fg("accent", fmtWin(ctxWin)));
   }
   // 5h/7d quota gauges — each its own part so the │ separator sits between them.
   for (const q of quotaChips) parts.push(q);

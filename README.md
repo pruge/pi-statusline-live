@@ -46,7 +46,7 @@ pi -e github.com/pruge/pi-statusline-live
 | `⚡provider` | active provider, always shown (`⚡OpenAI`, `⚡Gemini`, `⚡Ollama`, custom `my-proxy` → `⚡My Proxy`); quota bars appended below when available |
 | `path` | last 3 segments of cwd |
 | `git` | branch + `✓/✗` dirty |
-| `context` | `% + bar` against the active session model's context window |
+| `context` | mode chip (`🔒slim` dim when the session window is below the catalogue window / `🔓max` warning when it matches) + `% + bar` against the active session model's context window. Display-only — `pi-ctx` owns policy |
 | `cost` | session USD |
 | `tokens` | `↑in ↓out R W` session totals |
 | `⚡Anthropic 5h 7d` | Anthropic OAuth usage (`api.anthropic.com/api/oauth/usage`), used % + reset |
