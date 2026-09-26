@@ -5,13 +5,6 @@
  *  - @wierdbytes/pi-statusline (base UI: model / path / git / context / cost / tokens)
  *  - @latentminds/pi-quotas (realtime quota fetch: Anthropic 5h/7d, Codex 5h/7d, OpenCode Go 5h/7d/monthly)
  *
- * 0.3.0: /ctx 를 전 모델로 확장 + 세션·모델별 영속 — slim = min(cap, full) · max = full
- *   (full = providers 오버라이드 ?? 카탈로그 창). codex 만의 규칙이 아니게:
- *   1M 카탈로그 창(anthropic, cline, opencode…)도 slim 은 272k 에서 compact 되고
- *   /ctx max 로 그 세션·그 모델만 실제 창까지 연다. cap 미만 소형 모델은 건드리지 않는다.
- *   세션 entry 모양은 { released } 에서 { states: { "provider/id": bool } } 로 —
- *   마지막 스냅샷이 이고, 미기록 모델은 slim. 구 세션의 { released } 는 states 가
- *   나올 때까지 읽어 준다(하위 호환). 푸터 칩은 full > cap 일 때만 뜬다(slim ≡ max 면 생략).
  * 0.2.23: Cline 게이지를 pi-cline-bridge 에 연결. 핵심은 토큰이다 — Cline 의 OAuth
  *   refresh token 은 회전해서 디스크의 저장 토큰은 이미 무효인 경우가 대부분이고,
  *   statusline 이 직접 갱신하면 그 토큰을 쓰고 있는 pi-cline-bridge 와 `cline` CLI 의
@@ -27,12 +20,6 @@
  *   **토큰은 읽기만** — refresh token 이 회전하므로 statusline 이 갱신하면 그 토큰을
  *   쓰는 다른 프로세스의 다음 갱신이 실패한다. 0.2.23 에서 이 읽기 전용 규칙은
  *   bridge 가 발행한 키를 읹는 것으로 지켜진다.
- * 0.2.21: 컨텍스트 캡 어휘를 max/slim 으로 — /ctx max = **그 세션만** Codex
- *   실창(1.05M), /ctx slim = 현행과 같은 272k 자동 compact(기본). 창을 바꾸는 건
- *   pi 의 compact 판정이 `contextWindow - reserveTokens` 하나로 돌기 때문.
- *   max 스위치는 세션 custom entry 에만 남아 resume 해도 그 세션만 풀리고 옆
- *   세션은 slim 그대로. 푸터 ctx 게이지 앞에 모드 칩(🔒slim dim · 🔓max warning)
- *   — 명령을 치면 다음 모델 응답을 기다리지 않고 바로 다시 그려진다.
  * 0.2.18: OpenCode Go 월간(monthly) 게이지 추가 — 5h/7d 옆에 30d 로 붙는다.
  * 0.2.16: OpenCode Go 5h/7d 를 API 키로 조회(https://opencode.ai/zen/go/v1/usage).
  * 대시보드 스크랩(workspaceId + authCookie)은 폴백으로 유지 — 별도 설정 없이 pi auth 의
@@ -50,7 +37,6 @@ import { cacheRatio, cacheReadLabel, cacheReadSuffix, cacheTone, cachePaint, col
 import { pickClineToken } from "../src/cline-token.ts";
 import { clineWindows, codexWindows, minimaxWindows, opencodeWindows, toMs } from "../src/quota-windows.ts";
 import { CTX_TTL_MS, snapshotKey, staleNames, type CtxEntry } from "../src/ctx-snapshot.ts";
-import { CTX_CAP_FILE, CTX_CAP_ENTRY, capChipLabel, describeConfig, fmt, loadCapSnapshot, modelKeyOf, parseCapToken, parseConfig, resolveWindow, type CtxCapConfig } from "../src/ctx-cap.ts";
 import { detectColorMode, downgradeAnsi, foldLines, paintLiteral } from "../src/ansi.ts";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
@@ -594,31 +580,6 @@ function removeCtxSnapshot() {
   try { rmSync(join(homedir(), ".pi", "agent", "ctx-sessions", `${snapshotKey()}.json`), { force: true }); } catch { /* ignore */ }
 }
 
-// ── ctx cap: ~/.pi/agent/ctx-window.json (전역 기본값) + 세션 custom entry(모델별 max/slim) ──
-// pi 의 자동 compact 판정은 `contextTokens > model.contextWindow - reserveTokens` 라서
-// **모델 창 하나**가 compact 지점을 정한다(전역 reserveTokens 를 키우면 다른 모델까지
-// 매 턴 compact 되고 요약 출력 상한이 128k 로 폭주한다 — 그래서 창을 만진다).
-//
-// 층이 둘이다:
-//   전역 파일  = cap 수치 + 카탈로그 과소 보고 오버라이드(모든 세션이 공유)
-//   세션 entry = 이 세션의 모델별 max/slim — pi.appendEntry("ctx-cap", { states })
-// 그래서 한 세션에서 /ctx max 를 쳐도 다른 세션은 캡 그대로고,
-// 같은 세션에서도 모델을 바꾸면 그 모델의 선호(기본 slim)로 돌아간다.
-// 규칙·파싱은 src/ctx-cap.ts(순수), IO 는 여기만.
-function ctxCapPath(): string { return join(homedir(), ".pi", "agent", CTX_CAP_FILE); }
-function loadCtxCap(): CtxCapConfig {
-  try { return parseConfig(JSON.parse(readFileSync(ctxCapPath(), "utf8"))); } catch { return parseConfig(undefined); }
-}
-function saveCtxCap(cfg: CtxCapConfig): void {
-  try {
-    const file = ctxCapPath();
-    mkdirSync(dirname(file), { recursive: true });
-    const tmp = `${file}.tmp-${process.pid}`;
-    writeFileSync(tmp, JSON.stringify(cfg, null, 2) + "\n");
-    renameSync(tmp, file);
-  } catch { /* 설정 저장 실패는 푸터를 깨지 않는다 */ }
-}
-
 // per-provider cache (anthropic 5min, others 60s)
 const quotaCache = new Map<string, QuotaState>();
 const TTL: Record<string, number> = { anthropic: 5 * 60_000, "claude-bridge": 5 * 60_000, "openai-codex": 60_000, "opencode-go": 60_000, "cline-bridge": 60_000, clinepass: 60_000, cline: 60_000, minimax: 60_000, "minimax-cn": 60_000 };
@@ -696,17 +657,9 @@ function renderPhase(t: any, phase: Phase, toolName: string, thinkLevel: string,
 }
 
 // ── render (footer line) ──
-/** 푸터가 그리는 캡 상태 칩. null = 이 provider 는 캡 대상이 아니다(칩 없음). */
-type CapChip = { released: boolean; label: string } | null;
-function capChipText(t: any, chip: CapChip): string {
-  if (!chip) return "";
-  // 해제는 예외 상태다 — 경고색·bold 로 눈에 띄게. 캡(기본)은 dim 으로 조용히.
-  const paint = chip.released ? t.bold(t.fg("warning", chip.label)) : t.fg("dim", chip.label);
-  return paint + " ";
-}
 function renderLine(
   ctx: ExtensionContext, width: number, quota: QuotaState,
-  phase: Phase, toolName: string, thinkLevel: string, tick: number, capChip: CapChip = null,
+  phase: Phase, toolName: string, thinkLevel: string, tick: number,
 ): string[] {
   const t = ctx.ui.theme;
   const stats = gatherStats(ctx);
@@ -746,9 +699,8 @@ function renderLine(
   parts.push(SPLIT_MARK);
   // context (fullness signal: green → yellow → red)
   if (ctxWin > 0 && ctxPct >= 0) {
-    // 창 대비 사용량 하나를 두 번 말하지 않는다(백분율 + 게이지 + "남은 토큰") → "24% ▓▓░░ 236k/1M"
-    // 앞의 칩이 "지금 1M 인가 272k 인가"를 색과 자물쇠로 말한다 — 명령 직후 바로 바뀐다.
-    parts.push(capChipText(t, capChip) + gaugePct(t, "ctx", ctxPct) + " " + gaugeBar(t, "ctx", ctxPct) + t.fg("dim", ` ${fmtTokens(ctxCur)}/`) + t.fg(capChip?.released ? "warning" : "accent", fmtWin(ctxWin)));
+    // Window, percentage, and remaining tokens are one compact context signal.
+    parts.push(gaugePct(t, "ctx", ctxPct) + " " + gaugeBar(t, "ctx", ctxPct) + t.fg("dim", ` ${fmtTokens(ctxCur)}/`) + t.fg("accent", fmtWin(ctxWin)));
   }
   // 5h/7d quota gauges — each its own part so the │ separator sits between them.
   for (const q of quotaChips) parts.push(q);
@@ -815,11 +767,6 @@ export default function (pi: ExtensionAPI) {
   g[GUARD_KEY] = instanceId;
 
   let currentCtx: ExtensionContext | undefined;
-  let capCfg: CtxCapConfig = loadCtxCap();
-  // 이 세션의 모델별 max/slim — 세션 entry 의 states 스냅샷에서 복원된다.
-  // capLegacy*= states 없는 구 세션({ released }) 하위 호환. 미기록 모델은 slim(기본).
-  let capStates: Record<string, boolean> = {};
-  let capLegacy = false;
   let timer: ReturnType<typeof setInterval> | undefined;
   let spinTimer: ReturnType<typeof setInterval> | undefined;
   let quota: QuotaState = { at: 0, chips: [] };
@@ -875,76 +822,6 @@ export default function (pi: ExtensionAPI) {
     } catch { /* ignore */ }
   }
 
-  // 모델 창을 설정대로 맞춘다. **바뀔 때만** pi.setModel — 캡(기본)에서는 카탈로그
-  // 값(272k)과 같아 호출 자체가 없다(세션에 model_change 오염 0). 이 세션만 해제하면
-  // 세션당 1회 model_change + 1회 ctx-cap entry 가 남는다.
-  function nativeWindow(ctx: ExtensionContext): number {
-    try {
-      const m = ctx.model;
-      if (!m) return 0;
-      return ctx.modelRegistry.find(m.provider, m.id)?.contextWindow ?? m.contextWindow;
-    } catch { return ctx.model?.contextWindow ?? 0; }
-  }
-  function capModelKey(ctx: ExtensionContext): string {
-    try { const m = ctx.model; return m ? modelKeyOf(m.provider, m.id) : ""; }
-    catch { return ""; }
-  }
-  /** 현재 모델의 max 여부 — states 스냅샷 우선, 없으면 구 released 폴백, 기본 slim. */
-  function releasedFor(ctx: ExtensionContext): boolean {
-    const k = capModelKey(ctx);
-    if (k && Object.prototype.hasOwnProperty.call(capStates, k)) return capStates[k] === true;
-    // states 스냅샷이 이미 있으면 미기록 모델은 slim(legacy 가 전체를 덮지 않는다).
-    if (Object.keys(capStates).length > 0) return false;
-    return capLegacy;
-  }
-  let applyingCap = false;
-  async function applyCap(ctx: ExtensionContext): Promise<void> {
-    if (applyingCap) return; // 우리 setModel 이 띄운 model_select 재진입 차단
-    try {
-      const model = ctx.model;
-      if (!model) return;
-      const want = resolveWindow(nativeWindow(ctx), model.provider, capCfg, releasedFor(ctx));
-      if (!(want > 0) || model.contextWindow === want) return;
-      applyingCap = true;
-      await pi.setModel({ ...model, contextWindow: want });
-      repaint();
-    } catch { /* 캡 적용 실패는 세션을 깨지 않는다 */ }
-    finally { applyingCap = false; }
-  }
-  /** 이 세션에만 모델별 max/slim 을 기록한다(전역 파일 아님) — 마지막 스냅샷이 이긴다. */
-  function persistCapStates(): void {
-    try { pi.appendEntry(CTX_CAP_ENTRY, { states: { ...capStates } }); } catch { /* ignore */ }
-  }
-  /** /ctx 가 이 모델의 선호를 바꿀 때 — 그 모델만 갱신하고 스냅샷 전체를 다시 쓴다. */
-  function setReleasedFor(ctx: ExtensionContext, v: boolean): void {
-    const k = capModelKey(ctx);
-    if (k) capStates[k] = v;
-    // 첫 /ctx 로 states 모드에 들어서면 구 session-wide legacy 는 더 이상 적용하지 않는다.
-    if (Object.keys(capStates).length > 0) capLegacy = false;
-  }
-  function capStatus(ctx: ExtensionContext): string {
-    const m = ctx.model;
-    const w = typeof m?.contextWindow === "number" ? m.contextWindow : 0;
-    const native = nativeWindow(ctx);
-    const model = m ? `${m.provider}/${m.id}` : "?";
-    const sid = (() => { try { return ctx.sessionManager.getSessionId(); } catch { return "?"; } })();
-    return `${describeConfig(capCfg, releasedFor(ctx))} · ${model} 창 ${w > 0 ? fmt(w) : "?"}${native > 0 && native !== w ? ` (카탈로그 ${fmt(native)})` : ""} · 세션 ${String(sid).slice(0, 8)}`;
-  }
-  /** 푸터 칩: slim 과 max 의 창이 실제로 다르면(오버라이드 또는 cap 미만 초과 모델) 뜬다. */
-  function capChipFor(ctx: ExtensionContext): CapChip {
-    try {
-      const m = ctx.model;
-      if (!m) return null;
-      const native = nativeWindow(ctx);
-      if (!(native > 0)) return null;
-      const override = capCfg.providers[m.provider];
-      const full = typeof override === "number" && override > 0 ? override : native;
-      if (!(full > capCfg.cap)) return null; // slim ≡ max (소형 모델·cap 미만) — 칩 생략
-      const released = releasedFor(ctx);
-      return { released, label: capChipLabel(released) };
-    } catch { return null; }
-  }
-
   function installFooter(ctx: ExtensionContext) {
     currentCtx = ctx;
     syncThinkLevel(ctx);
@@ -957,7 +834,7 @@ export default function (pi: ExtensionAPI) {
         invalidate() {},
         render(width: number): string[] {
           syncThinkLevel(ctx);
-          const lines = renderLine(ctx, width, quota, phase, toolName, thinkLevel, tick, capChipFor(ctx));
+          const lines = renderLine(ctx, width, quota, phase, toolName, thinkLevel, tick);
           // 세션 타이틀 → 첫 줄 우측 끝. 없으면 lines 그대로(바이트 동일).
           try {
             const title = readSessionTitle();
@@ -1006,13 +883,6 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_start", async (_e, ctx) => {
     currentCtx = ctx;
-    // 이 세션 파일에 남은 모델별 max/slim 만 복원한다 — 다른 세션은 영향을 받지 않는다.
-    try {
-      const snap = loadCapSnapshot(ctx.sessionManager.getEntries());
-      capStates = snap.states;
-      capLegacy = snap.legacy;
-    } catch { capStates = {}; capLegacy = false; }
-    void applyCap(ctx); // 푸터 on/off 와 무관하게 캡은 적용된다
     if (!footerOn) return;
     installFooter(ctx);
     startTimers();
@@ -1046,7 +916,6 @@ export default function (pi: ExtensionAPI) {
   pi.on("model_select", async (_e, ctx) => {
     currentCtx = ctx;
     syncThinkLevel(ctx);
-    void applyCap(ctx);
     writeCtxSnapshot(ctx);
     void update(true);
   });
@@ -1078,43 +947,6 @@ export default function (pi: ExtensionAPI) {
         ].join("\n"),
         "info",
       );
-    },
-  });
-
-  pi.registerCommand("ctx", {
-    description: "컨텍스트 캡 — /ctx max = 이 세션·이 모델만 실제 창, /ctx slim = 272k 자동 compact(기본, 전 모델)",
-    getArgumentCompletions: (prefix: string) => {
-      const items = ["status", "max", "slim", "toggle"].filter((v) => v.startsWith(prefix)).map((v) => ({ value: v, label: v }));
-      return items.length > 0 ? items : null;
-    },
-    handler: async (args, ctx) => {
-      const a = (args ?? "").trim().toLowerCase();
-      if (a === "" || a === "status") { ctx.ui.notify(capStatus(ctx), "info"); return; }
-      // max = 그 모델의 실제 창(이 세션) · slim = 캡(이 세션, 기본). 미기록 모델은 slim.
-      if (a === "max" || a === "1m" || a === "on" || a === "unlock" || a === "free") setReleasedFor(ctx, true);
-      else if (a === "slim" || a === "272k" || a === "off" || a === "lock") setReleasedFor(ctx, false);
-      else if (a === "toggle") setReleasedFor(ctx, !releasedFor(ctx));
-      else if (a.startsWith("slim") || a.startsWith("cap")) {
-        // `/ctx slim 300k` = 그 값을 **전역** 기본 캡으로 저장하고 이 세션·이 모델을 slim 으로.
-        const tok = a.split(/\s+/)[1];
-        const n = tok ? parseCapToken(tok) : null;
-        if (n === null) {
-          ctx.ui.notify(`사용: /ctx slim <272k|300k|1m> — 전역 기본 캡(모든 세션). 이 세션만 바꾸려면 /ctx max|slim.`, "error");
-          return;
-        }
-        capCfg = { ...capCfg, cap: n };
-        setReleasedFor(ctx, false);
-        saveCtxCap(capCfg);
-      } else {
-        ctx.ui.notify(`모르는 인자: ${a} — /ctx [status|max|slim|toggle] · /ctx slim <272k|300k|1m>(전역)`, "error");
-        return;
-      }
-      persistCapStates();
-      await applyCap(ctx);
-      // 명령 직후 바로 반영: 다음 모델 응답을 기다리지 않는다. 스냅샷도 같이(orch 몫).
-      try { writeCtxSnapshot(ctx); } catch { /* ignore */ }
-      repaint();
-      ctx.ui.notify(capStatus(ctx), "info");
     },
   });
 

@@ -1,15 +1,11 @@
 ---
 name: verify-statusline
-description: "Drive pi-statusline-live the way a user does — build check, unit tests, ctx-snapshot contract, live quota spot-check. Use when touching extensions/ or src/, or to prove the footer before a release."
+description: "Drive pi-statusline-live the way a user does: build check, unit tests, context snapshot contract, and a live quota spot-check. Use when touching extensions/ or src/, or to prove the footer before a release."
 ---
 
 # Verify pi-statusline-live
 
-The footer itself is visual (needs an eyeball inside pi), but everything around it runs headless: esbuild check, unit tests, the ctx-snapshot file contract, and the quota endpoints.
-
-## Launch
-
-No server, no build output. Working directory is the package root.
+The footer itself needs a visual check inside pi. The build, tests, snapshot contract, and quota endpoint can run headless.
 
 ## Doctor
 
@@ -17,55 +13,40 @@ Read-only:
 
 ```bash
 node --version  # 22+
-ls extensions/live-statusline.ts src/cache-segment.ts src/ctx-snapshot.ts src/ctx-cap.ts
+ls extensions/live-statusline.ts src/cache-segment.ts src/ctx-snapshot.ts
 ```
 
 ## Drive
 
+Run from the package root:
+
 ```bash
 npm run check  # esbuild, no warnings
-npm test       # cache-segment 53 + ctx-snapshot 3 + ctx-cap 18 + quota-windows 8
+npm test       # cache-segment 53 + ctx-snapshot 3 + quota-windows 16 + cline-token 7
 ```
 
-Then the contract checks (commands, not eyeballing):
+Then check the snapshot file contract:
 
 ```bash
-# ctx-cap rule: default keeps the catalogue tier, `/ctx on` (released) opens the real window
-node -e "import('./src/ctx-cap.ts').then(m => { const c = m.defaultCtxCap(); console.log('capped', m.resolveWindow(272000,'openai-codex',c,false), 'on', m.resolveWindow(272000,'openai-codex',c,true), 'spark', m.resolveWindow(128000,'openai-codex',c,true), 'anthropic', m.resolveWindow(200000,'anthropic',c,true)); })"
-# ctx-snapshot shape: key + TTL twin constant matches the reader side
 node -e "import('./src/ctx-snapshot.ts').then(m => console.log(m.snapshotKey({HERDR_PANE_ID:'w9B:p1'}), m.CTX_TTL_MS))"
-# quota endpoint (needs the real key in keychain; read-only GET, optional)
+```
+
+Quota endpoint (optional, read-only GET; needs the real key in keychain):
+
+```bash
 curl -s -m 10 -H "Authorization: Bearer $(security find-generic-password -ws 'opencode')" https://opencode.ai/zen/go/v1/usage | head -c 200
 ```
 
-Manual only: footer rendering, the mode chip's color/width, and gauge colors inside pi (`/live-status refresh`, `/ctx max` → the `🔓max` chip appears without a model response, `/ctx slim` → `🔒slim`, Divider widths). Scripted checks cannot see pixels or drive pi's compaction loop — say so instead of claiming coverage. `capChipLabel()` itself is unit-tested (`🔒slim` / `🔓max`).
+`pi-ctx` owns context-window policy and `/ctx`. This package only displays the live session window. Check that the context gauge remains visible after loading the footer; run `/live-status refresh` to check the quota refresh command.
 
-The per-session half *is* scriptable — the extension edits the live model window, so a print-mode run shows it:
+## Manual check
 
-```bash
-# cap in one session (default), max in that session only, another session stays slim
-printf '{"v":1,"cap":272000,"providers":{"opencode-go":1000000}}' > ~/.pi/agent/ctx-window.json
-FOOT=extensions/live-statusline.ts
-# (1) fresh turn → slim, (2) /ctx max (command, no model call), (3) turn → 1M,
-# (4) /ctx slim, (5) turn → slim again. A second --session-id never picks up max.
-pi -p -ne -ns -np -nc -e "$FOOT" --session-id S --model opencode-go/deepseek-v4.1-flash -- "/ctx max"
-# the session's own jsonl must contain: customType "ctx-cap" data {"released":true}
-grep -o '"customType":"ctx-cap","data":{[^}]*}' ~/.pi/agent/sessions/*/*S*.jsonl
-```
-
-Restore `~/.pi/agent/ctx-window.json` to `{"v":1,"cap":272000,"providers":{"openai-codex":1050000}}`
-when done (the probe above overwrites it). `pi.appendEntry` only reaches disk once the
-session has a turn — a command-only print run creates no session file, so drive the
-sequence above (turn → command → turn), not command-only.
+Inside a fresh pi session, confirm the footer still shows phase, model, provider, path, git, context, cost, and token data. Run `/live-status refresh` and confirm the active provider's quota text updates when credentials are available. The TUI rendering and colors need an eyeball; headless tests cannot prove pixels.
 
 ## Evidence
 
-Proof is the terminal transcript: clean `check`, `tests 82 pass 0 fail` (cache-segment 53 + 3 + 18 + 8), the snapshot key + TTL line, the ctx-cap rule line, the per-session jsonl `ctx-cap` entry, and (if run) a 200 with `rolling/weekly/monthly` all three landing as `5h`/`7d`/`30d` gauges. Keep it in `artifacts/verify-statusline/<run>.log` via tee.
+Keep the terminal transcript in `artifacts/verify-statusline/<run>.log` via `tee`. Evidence includes a clean `check`, 79 passing tests, the snapshot key + TTL line, and (if run) a successful quota response with the expected windows.
 
 ## Cleanup
 
-Nothing starts, nothing to kill. Sandbox files (if any) go to `$TMPDIR` and are removed in the same command. Proof logs survive in `artifacts/` (git-ignored).
-
-## Helpers
-
-No helper scripts — the drive is `npm run check`, `npm test`, and the two one-liners above, all shown literally. Do not invent a wrapper that hides them.
+Nothing starts, nothing to kill. Remove sandbox files in the same command that creates them.

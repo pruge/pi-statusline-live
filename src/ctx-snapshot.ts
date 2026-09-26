@@ -1,7 +1,7 @@
 /**
  * ctx-snapshot — 세션별 컨텍스트 스냅샷의 파일 계약.
  *
- * statusline(pi-statusline-live)이 쓰고, orch(tf_status·idle 워치)가 읽는다.
+ * statusline(pi-statusline-live)과 pi-ctx가 쓰고, orch(tf_status·idle 워치)가 읽는다.
  * 패키지 간 import 금지 원칙에 따라 경계는 파일이다:
  *
  *   dir:   ~/.pi/agent/ctx-sessions/

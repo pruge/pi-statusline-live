@@ -46,14 +46,13 @@ pi -e github.com/pruge/pi-statusline-live
 | `⚡provider` | active provider, always shown (`⚡OpenAI`, `⚡Gemini`, `⚡Ollama`, custom `my-proxy` → `⚡My Proxy`); quota bars appended below when available |
 | `path` | last 3 segments of cwd |
 | `git` | branch + `✓/✗` dirty |
-| `context` | `% + bar` vs model context window, prefixed with the mode chip (`🔒slim` dim / `🔓max` warning) |
+| `context` | `% + bar` against the active session model's context window |
 | `cost` | session USD |
 | `tokens` | `↑in ↓out R W` session totals |
 | `⚡Anthropic 5h 7d` | Anthropic OAuth usage (`api.anthropic.com/api/oauth/usage`), used % + reset |
 | `⚡Codex 5h 7d` | OpenAI Codex (`chatgpt.com/backend-api/wham/usage`), `rate_limit` 의 5h/7d 창, used % + reset |
 | `⚡OpenCode Go 5h 7d 30d` | OpenCode Go API key (`/zen/go/v1/usage`; dashboard scrape as fallback). `rolling`/`weekly`/`monthly` → `5h`/`7d`/`30d` gauges |
 | `⚡Cline 5h 7d 30d` | ClinePass subscription — `api.cline.bot` `/api/v1/users/me/plan/usage-limits` gives the server-computed `percentUsed` + `resetsAt` per window (five_hour/weekly/monthly). One call, no client-side synthesis |
-| `context` cap | `/ctx max` opens the active model's real window for this session+model; `/ctx slim` keeps the 272k auto-compact cap (default, every model) |
 
 ## Commands
 
@@ -61,68 +60,16 @@ pi -e github.com/pruge/pi-statusline-live
 /live-status          — show on/off state
 /live-status refresh  — force quota refetch now
 /live-status on|off   — toggle custom footer (off = native footer back)
-
-/ctx                  — context cap status (this session+model's max/slim mode + effective window)
-/ctx max              — use this model's real window in THIS session only (per model)
-/ctx slim             — back to the 272k cap in THIS session (default, every model)
-/ctx toggle           — flip max ↔ slim for the active model
-/ctx slim <272k|300k|1m>  — set the GLOBAL default cap (every session) and go slim here
 ```
 
-## Context cap (`/ctx`) — max / slim, every model, per session+model
+Context-window policy and the `/ctx` command belong to `pi-ctx`. This extension only
+reports the active session model's current window in the footer.
 
-pi decides auto-compaction with `contextTokens > model.contextWindow - reserveTokens`,
-so the model's **context window** is the only lever that moves the compaction point.
-Raising `compaction.reserveTokens` instead would be global (every model compacts every
-turn) and would blow the summary output cap up to 128k (`0.8 * reserveTokens`, capped at
-`maxTokens`) — so this extension edits the window at runtime via `pi.setModel`.
+## Context window display
 
-**slim = min(cap, full)** · **max = full**, where `full` is the catalogue window unless a
-provider override says otherwise. Applies to **every model**: a 1M catalogue window
-(anthropic, cline, opencode, …) compacts at 272k in slim and opens to its real window on
-`/ctx max`. Catalogue windows below the cap (e.g. haiku 200k, spark 128k) are never
-touched — slim and max are the same there, so no chip either.
-
-- **slim** (default for every session and every model): `contextWindow = min(cap, full)`,
-  auto-compact at `cap − reserveTokens` (~256k with the default 272k cap)
-- **max** (this session **and** this model only): `contextWindow = full` (catalogue window,
-  or the provider override — codex `gpt-5.x` catalogue says 272k, real window is 1.05M)
-
-Two layers make that work:
-
-| Layer | Where | Scope |
-|---|---|---|
-| cap + catalogue-override map | `~/.pi/agent/ctx-window.json` | every session (the default) |
-| per-model max/slim snapshot | `pi.appendEntry("ctx-cap", { states })` in the session file | just that session |
-
-`states` is `{ "provider/modelId": true|false }` — last snapshot wins, unrecorded models
-are slim. The choice survives `/reload` and `--resume` of that session and never leaks to
-another session. Old sessions that only stored a session-wide `{ released }` flag still
-read that flag until the first `/ctx` writes a `states` snapshot.
-
-The footer says which mode you are in, next to the context gauge — the chip is
-`🔒slim` (dim) while capped and `🔓max` (bold warning) once open, and the window
-denominator flips `272k` ↔ the real window with it:
-
-```
-○ idle │ 🤖 gpt-5.6-sol 🧠 high │ ⚡Codex … │ 🔒slim 24% ▓▓ 65k/272k │ …   # slim (default)
-○ idle │ 🤖 gpt-5.6-sol 🧠 high │ ⚡Codex … │ 🔓max 6% ▓ 65k/1.1M │ …     # /ctx max
-○ idle │ 🤖 deepseek-v4.1-flash 🧠 high │ ⚡Cline … │ 🔒slim 8% ▓ 80k/272k │ …  # 1M model, slim
-```
-
-It repaints on the command itself (no need to wait for the next model response), and the
-ctx snapshot for orchestrators is rewritten at the same moment. Models whose full window
-is at or below the cap get no chip (slim ≡ max).
-
-```json
-{ "v": 1, "cap": 272000, "providers": { "openai-codex": 1050000 } }
-```
-
-`providers` only holds **overrides** for catalogue under-reports (codex gpt-5.x: catalogue
-272k, real 1.05M) — every other model uses its catalogue window as `full`. With the cap on
-and the catalogue already at 272k, no `pi.setModel` call happens at all (no session
-churn); opening max on a 1M model leaves one `model_change` + one `ctx-cap` entry in that
-one session.
+The context gauge reads `ctx.getContextUsage()` and the active model's `contextWindow`.
+It does not adjust the model or store slim/max state. Use `pi-ctx` to change the active
+window; the footer then displays the value pi is using.
 
 ## Ctx registry (for orchestrators)
 
@@ -130,7 +77,7 @@ Every session running this extension snapshots its context to a shared file:
 
 - dir: `~/.pi/agent/ctx-sessions/`, file `<HERDR_PANE_ID ?? PI_SESSION_ID ?? pid>.json`
 - shape: `{ v:1, pane?, session?, cwd, model?, provider?, pct, cur, win, at }`
-- written on `turn_end` / `model_select` / every 60s tick; stale entries (30min) pruned on write; own file removed on `session_shutdown`
+- statusline writes on `turn_end` / `model_select` / every 60s tick; `pi-ctx` refreshes after `/ctx` changes; stale entries (30min) pruned on write; own file removed on `session_shutdown`
 
 `pi-ticketflow` reads it (`tf_status` worker detail, idle-watch lines), matching workers by pane (`workerPane`) then worktree cwd. File boundary, no imports — see `src/ctx-snapshot.ts`.
 
