@@ -2,8 +2,10 @@
 import assert from "node:assert/strict";
 const { capChip } = await import("./cap-chip.ts");
 
-// codex gpt-5.x: 카탈로그 272k, pi-ctx max 는 오버라이드 1.05M → max 칩
-assert.equal(capChip(1_050_000, 272_000), null, "현재 창이 카탈로그보다 크면 판정 불가 — 침묵");
+// codex gpt-5.x: 네이티브는 카탈로그(272k)가 아니라 pi-ctx 해석식의 1.05M — native-window.ts 참조.
+// 네이티브를 카탈로그로만 재면 아래 케이스가 "판정 불가" 로 굳어 slim 에서 max 로 잘못 나온다.
+assert.equal(capChip(272_000, 1_050_000), "slim", "codex slim: 272k 캡 vs 1.05M 네이티브");
+assert.equal(capChip(1_050_000, 1_050_000), "max", "codex max: 창 == 네이티브");
 // 1M 모델 + slim 캡(272k) → slim
 assert.equal(capChip(272_000, 1_000_000), "slim");
 // 캡이 창 이하(haiku 200k, spark 128k) → slim ≡ max, max 칩

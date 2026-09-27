@@ -31,7 +31,7 @@ Quota endpoint (optional, read-only GET; needs the real key in keychain):
 curl -s -m 10 -H "Authorization: Bearer $(security find-generic-password -ws 'opencode')" https://opencode.ai/zen/go/v1/usage | head -c 200
 ```
 
-`pi-ctx` owns context-window policy and `/ctx`. This package only displays the live session window. Check that the context gauge remains visible after loading the footer; run `/live-status refresh` to check the quota refresh command.
+`pi-ctx` owns context-window policy and `/ctx`. This package only displays the live session window; for the `🔒slim` / `🔓max` chip it reads pi-ctx's native-window definition (observed store → provider override → registry) read-only, so a slimmed `openai-codex` session shows 🔒slim against its 1.05M override rather than the catalog's 272k. Check that the context gauge remains visible after loading the footer; run `/live-status refresh` to check the quota refresh command.
 
 ## Manual check
 

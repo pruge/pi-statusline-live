@@ -42,6 +42,6 @@
   },
   "scripts": {
     "check": "npx --yes esbuild extensions/*.ts --outdir=/tmp/pi-statusline-check --log-level=warning",
-    "test": "node src/cache-segment.test.mjs && node src/quota-windows.test.mjs && node src/cline-token.test.mjs && node src/cap-chip.test.mjs"
+    "test": "node src/cache-segment.test.mjs && node src/quota-windows.test.mjs && node src/cline-token.test.mjs && node src/cap-chip.test.mjs && node src/native-window.test.mjs"
   }
 }

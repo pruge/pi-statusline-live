@@ -37,6 +37,7 @@ import { capChip } from "../src/cap-chip.ts";
 import { cacheRatio, cacheReadLabel, cacheReadSuffix, cacheTone, cachePaint, colorForTone, GOOD_OPTIONS } from "../src/cache-segment.ts";
 import { pickClineToken } from "../src/cline-token.ts";
 import { clineWindows, codexWindows, minimaxWindows, opencodeWindows, toMs } from "../src/quota-windows.ts";
+import { nativeWindow } from "../src/native-window.ts";
 import { detectColorMode, downgradeAnsi, foldLines, paintLiteral } from "../src/ansi.ts";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
@@ -622,8 +623,11 @@ function renderLine(
   let ctxPct = -1, ctxCur = 0, ctxWin = 0;
   // Ownership (T06): the window shown here is pi's live session truth —
   // ctx.getContextUsage() / ctx.model — which pi-ctx has already set via setModel.
-  // This is a one-way read through pi's public API, not a file contract: no
-  // a shared snapshot file, no pi-ctx import, and never write policy here.
+  // One-way read through pi's public API; this file never decides a cap and never
+  // writes. The one thing it does read from pi-ctx is the *definition* of the
+  // native window (observed store > provider override > catalog) — without it the
+  // chip is blind for exactly the models pi-ctx overrides (openai-codex 272k→1.05M),
+  // and slim prints 🔓max. Read-only, same rule as the Cline bridge token.
   try {
     const u = ctx.getContextUsage();
     if (u) { ctxWin = u.contextWindow ?? ctx.model?.contextWindow ?? 0; ctxCur = u.tokens ?? 0; ctxPct = ctxWin > 0 ? Math.floor((ctxCur * 100) / ctxWin) : -1; }
@@ -658,14 +662,17 @@ function renderLine(
   } catch { /* ignore */ }
   parts.push(SPLIT_MARK);
   // context (fullness signal: green → yellow → red), prefixed with the mode chip.
-  // 표시 전용: 세션 모델의 현재 창을 카탈로그 창과 비교해 🔒slim/🔓max 를 말한다.
-  // 정책(pi-ctx)은 읽지 않는다 — pi 가 이미 적용한 창을 다시 그릴 뿐이다.
+  // 표시 전용: 세션 모델의 현재 창을 네이티브 창과 비교해 🔒slim/🔓max 를 말한다.
+  // 캡 정책(pi-ctx)은 읽지 않는다 — pi 가 이미 적용한 창을 다시 그릴 뿐이다.
+  // 다만 "네이티브" 의 정의만 pi-ctx 와 같게 맞춘다(아래 주석).
   if (ctxWin > 0 && ctxPct >= 0) {
     const native = (() => {
       try {
         const m = ctx.model;
-        const w = m ? ctx.modelRegistry.find(m.provider, m.id)?.contextWindow : 0;
-        return typeof w === "number" ? w : 0;
+        const w = m ? ctx.modelRegistry.find(m.provider, m.id)?.contextWindow ?? 0 : 0;
+        // 카탈로그만 보면 openai-codex(272k) 는 네이티브도 272k 라서 slim 을 못 본다.
+        // pi-ctx 의 해석식(관측 > 프로바이더 오버라이드 > 카탈로그)을 읽기 전용으로 재현한다.
+        return nativeWindow(m?.provider, m?.id, w);
       } catch { return 0; }
     })();
     const chip = capChip(ctxWin, native);

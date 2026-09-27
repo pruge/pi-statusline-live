@@ -46,7 +46,7 @@ pi -e github.com/pruge/pi-statusline-live
 | `⚡provider` | active provider, always shown (`⚡OpenAI`, `⚡Gemini`, `⚡Ollama`, custom `my-proxy` → `⚡My Proxy`); quota bars appended below when available |
 | `path` | last 3 segments of cwd |
 | `git` | branch + `✓/✗` dirty |
-| `context` | mode chip (`🔒slim` dim when the session window is below the catalogue window / `🔓max` warning when it matches) + `% + bar` against the active session model's context window. Display-only — `pi-ctx` owns policy |
+| `context` | mode chip (`🔒slim` dim when the session window is below the native window / `🔓max` warning when it matches) + `% + bar` against the active session model's context window. Display-only — `pi-ctx` owns policy |
 | `cost` | session USD |
 | `tokens` | `↑in ↓out R W` session totals |
 | `⚡Anthropic 5h 7d` | Anthropic OAuth usage (`api.anthropic.com/api/oauth/usage`), used % + reset |
@@ -77,6 +77,15 @@ There is no shared per-session ctx snapshot file anymore. pi-ctx owns context-wi
 and `/ctx`; this footer reads the live session (`ctx.getContextUsage()` / `ctx.model`)
 via pi's public API and displays it. Removing a consumerless file also removes the
 60s-tick revert race after `/ctx slim`. See `pi-ctx/docs/PLAN.md` T06.
+
+One thing is still read from pi-ctx: the *definition* of the native window, needed to label
+`🔒slim` / `🔓max`. The footer reproduces pi-ctx's precedence — observed store
+(`~/.pi/agent/pi-ctx/windows.json`) → provider override (`~/.pi/agent/ctx-window.json`) →
+pi's model registry — in `src/native-window.ts`. Reading the registry alone inverts the chip
+for exactly the models pi-ctx overrides: `openai-codex` ships 272k in the catalog while the
+real window is 1.05M, so `/ctx slim` (272k) compared against the catalog alone looks equal
+and prints 🔓max, and `/ctx max` looks "undecidable" and prints nothing. Read-only, mtime
+cached, never written — same rule as the Cline bridge token.
 
 ## Credentials
 
