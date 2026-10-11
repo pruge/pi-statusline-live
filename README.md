@@ -46,7 +46,7 @@ pi -e github.com/pruge/pi-statusline-live
 | `⚡provider` | active provider, always shown (`⚡OpenAI`, `⚡Gemini`, `⚡Ollama`, custom `my-proxy` → `⚡My Proxy`); quota bars appended below when available |
 | `path` | last 3 segments of cwd |
 | `git` | branch + `✓/✗` dirty |
-| `context` | mode chip (`🔒slim` dim when the session window is below the native window / `🔓max` warning when it matches) + `% + bar` against the active session model's context window. Display-only — `pi-ctx` owns policy |
+| `context` | mode chip (`🔒slim` dim when the session window is below the native window / `🔓max` warning when it matches) + `% + bar` against the active session model's context window. When pi has no usage yet (right after a compaction) it prints `? ?░░░░░░░░░ ?/200k`, never a confident `0%`. Display-only — `pi-ctx` owns policy |
 | `cost` | session USD |
 | `tokens` | `↑in ↓out R W` session totals |
 | `⚡Anthropic 5h 7d` | Anthropic OAuth usage (`api.anthropic.com/api/oauth/usage`), used % + reset |
@@ -69,7 +69,10 @@ reports the active session model's current window in the footer.
 ## Context window display
 
 The context gauge reads `ctx.getContextUsage()` and the active model's `contextWindow`.
-It does not adjust the model or store slim/max state. Use `pi-ctx` to change the active
+It does not adjust the model or store slim/max state. `getContextUsage()` answers
+`{tokens: null, percent: null}` until the first response after the latest compaction —
+pi's own footer prints `?/200k` there, and `src/context-gauge.ts` keeps that distinction
+instead of flattening `null` to a `0%` that would claim an empty context. Use `pi-ctx` to change the active
 window; the footer then displays the value pi is using.
 
 ## Ctx ownership (T06)

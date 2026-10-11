@@ -38,6 +38,7 @@
  */
 
 import { capChip } from "../src/cap-chip.ts";
+import { contextGauge, type ContextGauge } from "../src/context-gauge.ts";
 import { cacheRatio, cacheReadLabel, cacheReadSuffix, cacheTone, cachePaint, colorForTone, GOOD_OPTIONS } from "../src/cache-segment.ts";
 import { pickClineToken } from "../src/cline-token.ts";
 import { apinexBalance, clineWindows, codexWindows, minimaxWindows, opencodeWindows, toMs } from "../src/quota-windows.ts";
@@ -659,7 +660,7 @@ function renderLine(
 ): string[] {
   const t = ctx.ui.theme;
   const stats = gatherStats(ctx);
-  let ctxPct = -1, ctxCur = 0, ctxWin = 0;
+  let ctxGauge: ContextGauge = null;
   // Ownership (T06): the window shown here is pi's live session truth —
   // ctx.getContextUsage() / ctx.model — which pi-ctx has already set via setModel.
   // One-way read through pi's public API; this file never decides a cap and never
@@ -668,9 +669,7 @@ function renderLine(
   // chip is blind for exactly the models pi-ctx overrides (openai-codex 272k→1.05M),
   // and slim prints 🔓max. Read-only, same rule as the Cline bridge token.
   try {
-    const u = ctx.getContextUsage();
-    if (u) { ctxWin = u.contextWindow ?? ctx.model?.contextWindow ?? 0; ctxCur = u.tokens ?? 0; ctxPct = ctxWin > 0 ? Math.floor((ctxCur * 100) / ctxWin) : -1; }
-    else { ctxWin = ctx.model?.contextWindow ?? 0; }
+    ctxGauge = contextGauge(ctx.getContextUsage(), ctx.model?.contextWindow ?? 0);
   } catch { /* ignore */ }
 
   const parts: string[] = [renderPhase(t, phase, toolName, thinkLevel, tick)];
@@ -704,7 +703,7 @@ function renderLine(
   // 표시 전용: 세션 모델의 현재 창을 네이티브 창과 비교해 🔒slim/🔓max 를 말한다.
   // 캡 정책(pi-ctx)은 읽지 않는다 — pi 가 이미 적용한 창을 다시 그릴 뿐이다.
   // 다만 "네이티브" 의 정의만 pi-ctx 와 같게 맞춘다(아래 주석).
-  if (ctxWin > 0 && ctxPct >= 0) {
+  if (ctxGauge) {
     const native = (() => {
       try {
         const m = ctx.model;
@@ -714,10 +713,15 @@ function renderLine(
         return nativeWindow(m?.provider, m?.id, w);
       } catch { return 0; }
     })();
-    const chip = capChip(ctxWin, native);
+    const chip = capChip(ctxGauge.contextWindow, native);
     const prefix = chip === "slim" ? t.fg("dim", "🔒slim ") : chip === "max" ? t.fg("warning", "🔓max ") : "";
     // Window, percentage, and remaining tokens are one compact context signal.
-    parts.push(prefix + gaugePct(t, "ctx", ctxPct) + " " + gaugeBar(t, "ctx", ctxPct) + t.fg("dim", ` ${fmtTokens(ctxCur)}/`) + t.fg("accent", fmtWin(ctxWin)));
+    // 모를 때는 비어 있다는 0% 대신 ? 로 답한다 — 최신 compaction 이후 아직
+    // LLM 응답이 없으면 pi 도 percent=null 을 돌려보낸다(내장 푸터는 ?/200k).
+    const seg = ctxGauge.known
+      ? gaugePct(t, "ctx", ctxGauge.percent) + " " + gaugeBar(t, "ctx", ctxGauge.percent) + t.fg("dim", ` ${fmtTokens(ctxGauge.tokens)}/`)
+      : t.fg("dim", `? ${"░".repeat(10)} ?/`);
+    parts.push(prefix + seg + t.fg("accent", fmtWin(ctxGauge.contextWindow)));
   }
   // 5h/7d quota gauges — each its own part so the │ separator sits between them.
   for (const q of quotaChips) parts.push(q);
