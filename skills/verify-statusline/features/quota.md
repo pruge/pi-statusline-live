@@ -12,6 +12,10 @@
   를 직접 준다 → `5h`/`7d`/`30d` 게이지 + 리셋 꼬리. **한도×거래 합성은 쓰지 않는다** —
   클라에서 합성하면 비구독(usage-billing) 사용량까지 끌어와 홈페이지보다 크게
   나온다(실측: 18% vs 홈페이지 0%). 파서는 `clineWindows`, 한 곳.
+- APInex — `GET https://api.apinex.bond/v1/balance`: 시간 창이 아니라 **돈**이라 게이지가
+  아니라 텍스트 칩(`$0.02 spent · $3.10 left`). `balance_usd`(지갑) +
+  `api_key.spent_usd`(키별 사용량), 한도를 걸었을 때만 `spend_limit_usd` → ` / $Z cap`
+  (도달하면 빨강). 파서는 `apinexBalance`, 한 곳.
 
 ## How to get to it (user POV)
 
@@ -25,6 +29,7 @@ Preconditions: baseline plus the macOS keychain holding the `opencode` password 
 - **Codex endpoint.** 토큰·계정은 `~/.codex/auth.json` 에서 읽는다(파일에 적지 말고 명령에서 바로).
   `TOK=$(jq -r .tokens.access_token ~/.codex/auth.json); ACC=$(jq -r .tokens.account_id ~/.codex/auth.json); curl -sS -o /tmp/wham.json -w '%{http_code}\n' https://chatgpt.com/backend-api/wham/usage -H "Authorization: Bearer $TOK" -H "ChatGPT-Account-Id: $ACC" -H 'User-Agent: Mozilla/5.0'` → 200 + `rate_limit.primary_window.used_percent`.
 - **Cline endpoint.** 키는 `~/.pi/agent/auth.json` 의 clinepass OAuth(`workos:` 접두) 또는 keychain: `curl -s -m 10 -H "Authorization: Bearer $(jq -r .clinepass.access ~/.pi/agent/auth.json)" https://api.cline.bot/api/v1/users/me/plan/usage-limits` → 200 + `data.limits[]` 세 창. `percentUsed` 가 **사용률**임에 주의 (남은 비율이 아니다).
+- **APInex endpoint.** 키는 keychain `apinex`(auth.json 의 `!command` 참조와 같은 것): `curl -s -m 10 -H "Authorization: Bearer $(security find-generic-password -ws 'apinex')" https://api.apinex.bond/v1/balance` → 200 + `balance_usd` / `api_key.spent_usd`. 잔액 0 + `free/*` 모델은 `allowFree=false` 면 402 `billing_error`(구독 필요) — 잔액 칩은 그와 무관하게 뜬다.
 - **Proof.** The 200 body head in the transcript.
 
 ## Gotchas

@@ -1,7 +1,7 @@
 // quota-windows 계약 테스트 — 실측 payload 모양 고정. Run: node src/quota-windows.test.mjs
 import test from "node:test";
 import assert from "node:assert/strict";
-import { clineWindows, codexWindows, minimaxWindows, opencodeWindows, toMs } from "./quota-windows.ts";
+import { apinexBalance, clineWindows, codexWindows, minimaxWindows, opencodeWindows, toMs } from "./quota-windows.ts";
 
 // 2026-09-17 실측(GET chatgpt.com/backend-api/wham/usage, HTTP 200). id/email 만 가림.
 const CODEX_LIVE = {
@@ -178,4 +178,39 @@ test("toMs — 초는 ms 로, ms 는 그대로, 문자열 ISO 도 받는다", ()
 	assert.equal(toMs(1789615956000), 1789615956000);
 	assert.equal(toMs("2026-09-17T00:00:00Z"), Date.parse("2026-09-17T00:00:00Z"));
 	assert.equal(toMs(null), 0);
+});
+
+// 2026-10-11 실측(GET api.apinex.bond/v1/balance, HTTP 200). 키 id 는 가림.
+// 돈이라 창(QuotaWindow)이 아니라 숫자 — spend_limit_usd 는 한도를 걸었을 때만 나온다.
+const APINEX_LIVE = {
+	object: "balance",
+	balance_usd: 0,
+	reserved_usd: 0,
+	api_key: { id: "key_fixture", spend_limit_usd: null, spent_usd: 0, reserved_usd: 0, remaining_usd: null, limit_reached: false },
+};
+
+test("apinexBalance — 실측 balance_usd(지갑) + api_key.spent_usd(키별 사용량)를 읽는다", () => {
+	assert.deepEqual(apinexBalance(APINEX_LIVE), {
+		spentUsd: 0,
+		balanceUsd: 0,
+		limitUsd: null,
+		limitReached: false,
+	});
+});
+
+test("apinexBalance — 지출 한도가 있으면 limitUsd 로, 도달하면 limitReached 로 올라온다", () => {
+	const out = apinexBalance({
+		...APINEX_LIVE,
+		balance_usd: 1.25,
+		api_key: { ...APINEX_LIVE.api_key, spend_limit_usd: 5, spent_usd: 0.4, limit_reached: true },
+	});
+	assert.deepEqual(out, { spentUsd: 0.4, balanceUsd: 1.25, limitUsd: 5, limitReached: true });
+});
+
+test("apinexBalance — balance_usd 가 숫자가 아니면 null(칩 없음)", () => {
+	assert.equal(apinexBalance({}), null);
+	assert.equal(apinexBalance({ object: "balance", balance_usd: "n/a" }), null);
+	assert.equal(apinexBalance(null), null);
+	// spent_usd 가 깨졌어도 지갑은 읽는다 — 사용량 0 으로 본다
+	assert.equal(apinexBalance({ balance_usd: 2, api_key: { spent_usd: "n/a" } })?.spentUsd, 0);
 });

@@ -5,6 +5,10 @@
  *  - @wierdbytes/pi-statusline (base UI: model / path / git / context / cost / tokens)
  *  - @latentminds/pi-quotas (realtime quota fetch: Anthropic 5h/7d, Codex 5h/7d, OpenCode Go 5h/7d/monthly)
  *
+ * 0.3.1: APInex 잔액 칩 — GET https://api.apinex.bond/v1/balance 의 balance_usd(지갑) +
+ *   api_key.spent_usd(키별 사용량)를 푸터에 `$X spent · $Y left` 텍스트로 보인다. 돈이라
+ *   5h/7d 게이지가 아니라 텍스트 칩이다. 응답 해석은 src/quota-windows.ts 의 apinexBalance
+ *   한 곳에서만. 키는 pi auth(apinex)에서 읽는다.
  * 0.2.23: Cline 게이지를 pi-cline-bridge 에 연결. 핵심은 토큰이다 — Cline 의 OAuth
  *   refresh token 은 회전해서 디스크의 저장 토큰은 이미 무효인 경우가 대부분이고,
  *   statusline 이 직접 갱신하면 그 토큰을 쓰고 있는 pi-cline-bridge 와 `cline` CLI 의
@@ -36,7 +40,8 @@
 import { capChip } from "../src/cap-chip.ts";
 import { cacheRatio, cacheReadLabel, cacheReadSuffix, cacheTone, cachePaint, colorForTone, GOOD_OPTIONS } from "../src/cache-segment.ts";
 import { pickClineToken } from "../src/cline-token.ts";
-import { clineWindows, codexWindows, minimaxWindows, opencodeWindows, toMs } from "../src/quota-windows.ts";
+import { apinexBalance, clineWindows, codexWindows, minimaxWindows, opencodeWindows, toMs } from "../src/quota-windows.ts";
+import type { ApinexBalance } from "../src/quota-windows.ts";
 import { nativeWindow } from "../src/native-window.ts";
 import { detectColorMode, downgradeAnsi, foldLines, paintLiteral } from "../src/ansi.ts";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -129,6 +134,8 @@ type QuotaState = {
   chips: QuotaChip[];
   error?: string;
   provider?: string;
+  /** 창 게이지가 아닌 값 — APInex 잔액처럼 돈은 텍스트 칩으로 그린다. */
+  balance?: ApinexBalance;
 };
 
 // ── gauge colors ──
@@ -451,6 +458,29 @@ async function fetchCline(token?: string): Promise<QuotaChip[]> {
   return clineWindows(d);
 }
 
+// APInex 잔액 — 같은 키로 모델을 부르고 /v1/balance 가 지갑(balance_usd) + 키별 사용량
+// (api_key.spent_usd)을 준다. 5h/7d 창이 아니라 돈이라 게이지가 아니라 텍스트 칩이다.
+// 응답 해석은 src/quota-windows.ts 의 apinexBalance 한 곳에서만.
+const APINEX_BASE = process.env.APINEX_API_BASE?.trim() || "https://api.apinex.bond";
+async function apinexApiKey(ctx: ExtensionContext): Promise<string | undefined> {
+  try {
+    const r: any = ctx.modelRegistry as any;
+    const t = await r?.authStorage?.getApiKey?.("apinex")
+      ?? await r?.getApiKeyForProvider?.("apinex");
+    if (typeof t === "string" && t) return expandCommandRef(t);
+  } catch { /* fall through */ }
+  const auth = readJson(join(homedir(), ".pi", "agent", "auth.json"));
+  const v = auth?.apinex?.key ?? auth?.apinex?.access;
+  if (typeof v === "string" && v) return expandCommandRef(v);
+  return undefined;
+}
+async function fetchApinexBalance(apiKey?: string): Promise<ApinexBalance | null> {
+  if (!apiKey || apiKey.startsWith("!")) return null;
+  const d: any = await fetchJson(`${APINEX_BASE}/v1/balance`,
+    { Authorization: `Bearer ${apiKey}`, Accept: "application/json" });
+  return apinexBalance(d);
+}
+
 // ── fetch ──
 async function fetchJson(url: string, headers: Record<string, string>, signal?: AbortSignal) {
   const combined = AbortSignal.any([AbortSignal.timeout(FETCH_TIMEOUT_MS), ...(signal ? [signal] : [])]);
@@ -539,7 +569,7 @@ async function fetchMiniMax(): Promise<QuotaChip[]> {
 
 // per-provider cache (anthropic 5min, others 60s)
 const quotaCache = new Map<string, QuotaState>();
-const TTL: Record<string, number> = { anthropic: 5 * 60_000, "claude-bridge": 5 * 60_000, "openai-codex": 60_000, "opencode-go": 60_000, "cline-bridge": 60_000, clinepass: 60_000, cline: 60_000, minimax: 60_000, "minimax-cn": 60_000 };
+const TTL: Record<string, number> = { anthropic: 5 * 60_000, "claude-bridge": 5 * 60_000, "openai-codex": 60_000, "opencode-go": 60_000, "cline-bridge": 60_000, clinepass: 60_000, cline: 60_000, minimax: 60_000, "minimax-cn": 60_000, apinex: 60_000 };
 
 async function refreshQuotas(ctx: ExtensionContext, force = false): Promise<QuotaState> {
   const provider = (() => { try { return ctx.model?.provider; } catch { return undefined; } })();
@@ -578,6 +608,14 @@ async function refreshQuotas(ctx: ExtensionContext, force = false): Promise<Quot
     } else if (provider === "opencode" || provider === "opencode-go") {
       state.chips = await fetchOpenCodeGo(ctx);
       if (state.chips.length === 0) state.error = "no-go-config";
+    } else if (provider === "apinex") {
+      // APInex — 게이지가 아니라 돈. 지갑 잔액 + 키별 사용량을 텍스트 칩으로.
+      const key = await apinexApiKey(ctx);
+      if (!key) state.error = "no-creds";
+      else {
+        const b = await fetchApinexBalance(key);
+        if (b) state.balance = b; else state.error = "no-balance";
+      }
     } else if (provider === "minimax" || provider === "minimax-cn") {
       state.chips = await fetchMiniMax();
       if (state.chips.length === 0) state.error = "no-mmx";
@@ -595,6 +633,7 @@ async function refreshQuotas(ctx: ExtensionContext, force = false): Promise<Quot
     state.error = e instanceof Error ? e.message.slice(0, 80) : "fetch-fail";
     // keep last good chips on transient failure
     if (cached?.chips.length) state.chips = cached.chips;
+    if (cached?.balance) state.balance = cached.balance;
   }
   state.at = Date.now();
   quotaCache.set(key, state);
@@ -682,6 +721,13 @@ function renderLine(
   }
   // 5h/7d quota gauges — each its own part so the │ separator sits between them.
   for (const q of quotaChips) parts.push(q);
+  // APInex 잔액 — 창 게이지가 아니라 돈이라 텍스트로(게이지로 만들면 % 가 의미가 없다).
+  if (quota.balance) {
+    const b = quota.balance;
+    const seg = [`$${b.spentUsd.toFixed(2)} spent`, `$${b.balanceUsd.toFixed(2)} left`];
+    if (b.limitUsd != null) seg.push(`$${b.limitUsd.toFixed(2)} cap`);
+    parts.push(b.limitReached ? t.fg("error", seg.join(" · ")) : t.fg("dim", seg.join(" · ")));
+  }
   // cost
   if (stats.cost > 0) parts.push(t.fg("dim", `$${stats.cost.toFixed(2)}`));
   // tokens
@@ -947,12 +993,16 @@ export default function (pi: ExtensionAPI) {
       if (a === "refresh" || a === "r") {
         currentCtx = ctx;
         await update(true);
-        const q = quota.chips.map((c) => {
+        const bal = quota.balance
+          ? `$${quota.balance.spentUsd.toFixed(2)} spent · $${quota.balance.balanceUsd.toFixed(2)} left${quota.balance.limitUsd != null ? ` · cap $${quota.balance.limitUsd.toFixed(2)}` : ""}`
+          : "";
+        const chips = quota.chips.map((c) => {
           const used = Math.max(0, Math.min(100, Math.round(100 - c.remainPct)));
           const reset = fmtReset(c.resetsAt);
           // Cline 창은 rolling 이라 리셋이 없다 — 빈 괄호를 남기지 않는다.
           return reset ? `${c.label} ${used}% (⏳ ${reset})` : `${c.label} ${used}%`;
-        }).join(", ") || quota.error || "no data";
+        }).join(", ");
+        const q = [bal, chips].filter(Boolean).join(" · ") || quota.error || "no data";
         ctx.ui.notify(`quotas [${quota.provider ?? "?"}]: ${q}`, "info");
         return;
       }

@@ -127,3 +127,34 @@ export function opencodeWindows(payload: unknown): QuotaWindow[] {
 	add("30d", u.monthly);
 	return out;
 }
+
+/**
+ * APInex GET /v1/balance — 지갑 잔액 + 키별 사용량. 5h/7d 같은 시간 창이 아니라 **돈**이라
+ * 여기서 창(QuotaWindow)으로 만들지 않고 숫자만 돌려준다. 푸터가 텍스트 칩으로 그린다.
+ * 실측(2026-10-11, HTTP 200):
+ *   { object: "balance", balance_usd: 0, reserved_usd: 0,
+ *     api_key: { id: "key_…", spend_limit_usd: null, spent_usd: 0,
+ *                reserved_usd: 0, remaining_usd: null, limit_reached: false } }
+ * spend_limit_usd 는 키에 한도를 걸었을 때만 나온다(null = 무한도).
+ */
+export interface ApinexBalance {
+	spentUsd: number;
+	balanceUsd: number;
+	/** 키별 지출 한도. null = 한도 없음. */
+	limitUsd: number | null;
+	limitReached: boolean;
+}
+
+export function apinexBalance(payload: unknown): ApinexBalance | null {
+	const p = payload as any;
+	if (!p || typeof p.balance_usd !== "number" || !Number.isFinite(p.balance_usd)) return null;
+	const k = (p.api_key ?? {}) as any;
+	const spent = Number(k.spent_usd);
+	const limit = k.spend_limit_usd == null ? null : Number(k.spend_limit_usd);
+	return {
+		spentUsd: Number.isFinite(spent) ? spent : 0,
+		balanceUsd: p.balance_usd,
+		limitUsd: limit != null && Number.isFinite(limit) ? limit : null,
+		limitReached: k.limit_reached === true,
+	};
+}

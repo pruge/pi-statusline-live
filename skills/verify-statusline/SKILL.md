@@ -22,7 +22,7 @@ Run from the package root:
 
 ```bash
 npm run check  # esbuild, no warnings
-npm test       # cache-segment 53 + quota-windows 16 + cline-token 7
+npm test       # cache-segment 53 + quota-windows 19 + cline-token 7 (node:test) + cap-chip/native-window assert suites
 ```
 
 Quota endpoint (optional, read-only GET; needs the real key in keychain):
@@ -39,7 +39,7 @@ Inside a fresh pi session, confirm the footer still shows phase, model, provider
 
 ## Evidence
 
-Keep the terminal transcript in `artifacts/verify-statusline/<run>.log` via `tee`. Evidence includes a clean `check`, 76 passing tests, and (if run) a successful quota response with the expected windows.
+Keep the terminal transcript in `artifacts/verify-statusline/<run>.log` via `tee`. Evidence includes a clean `check`, 79 passing node:test cases (53 + 19 + 7) plus green cap-chip/native-window assert suites, and (if run) a successful quota response with the expected windows.
 
 ## Cleanup
 

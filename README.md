@@ -53,6 +53,7 @@ pi -e github.com/pruge/pi-statusline-live
 | `⚡Codex 5h 7d` | OpenAI Codex (`chatgpt.com/backend-api/wham/usage`), `rate_limit` 의 5h/7d 창, used % + reset |
 | `⚡OpenCode Go 5h 7d 30d` | OpenCode Go API key (`/zen/go/v1/usage`; dashboard scrape as fallback). `rolling`/`weekly`/`monthly` → `5h`/`7d`/`30d` gauges |
 | `⚡Cline 5h 7d 30d` | ClinePass subscription — `api.cline.bot` `/api/v1/users/me/plan/usage-limits` gives the server-computed `percentUsed` + `resetsAt` per window (five_hour/weekly/monthly). One call, no client-side synthesis |
+| `$X spent · $Y left` | APInex wallet — `api.apinex.bond/v1/balance` gives `balance_usd` (wallet) + `api_key.spent_usd` (this key's spend). Money, not a window: text chip, no gauge. Optional `/ $Z cap` when the key has a spend limit |
 
 ## Commands
 
@@ -95,6 +96,7 @@ No extra setup — reads what pi already has:
 - Codex: pi auth `openai-codex` + `~/.codex/auth.json` account id.
 - OpenCode Go: pi auth `opencode-go` / `opencode` key (or `OPENCODE_API_KEY`) — no setup. Dashboard scrape (`OPENCODE_GO_WORKSPACE_ID` + `OPENCODE_GO_AUTH_COOKIE`, or `~/.config/opencode/opencode-quota/opencode-go.json`) stays as fallback for keys without API access.
 - Cline: pi auth `clinepass` OAuth token (or `CLINE_API_KEY`). Reuses the WorkOS login that `pi-clinepass-provider` stores in `~/.pi/agent/auth.json` / `~/.cline`; the token is read-only here — refreshing it would break the provider's own next refresh (WorkOS refresh tokens are single-use). Needs a ClinePass plan; without a subscription the gauges stay hidden (`no-plan`), which is a subscription state, not a failure.
+- APInex: pi auth `apinex` API key (the `!security find-generic-password -ws 'apinex'` command ref is expanded at call time, same as the provider). Balance chip shows for the active `apinex` provider; `APINEX_API_BASE` overrides the endpoint.
 
 ## Credits
 
