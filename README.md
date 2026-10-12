@@ -91,6 +91,17 @@ real window is 1.05M, so `/ctx slim` (272k) compared against the catalog alone l
 and prints 🔓max, and `/ctx max` looks "undecidable" and prints nothing. Read-only, mtime
 cached, never written — same rule as the Cline bridge token.
 
+## Quota refresh
+
+The `⚡provider` chip and the gauges come from a cached quota state, so the footer
+never shows a provider the session has already left. A session replacement — pi-ctx's
+`/clear` is the usual one — comes up on the settings-default provider and only then
+has its own model restored, so `model_select` fires while the `session_start` fetch
+for that default is still in flight. The refresh queue coalesces instead of dropping:
+a request that lands mid-flight schedules one follow-up run, and a state whose provider
+no longer matches the live `ctx.model.provider` is not applied (the chip falls back to
+the live provider, the gauges drop). `src/quota-refresh.ts` owns both rules.
+
 ## Credentials
 
 No extra setup — reads what pi already has:

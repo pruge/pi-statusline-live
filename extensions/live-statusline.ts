@@ -44,6 +44,7 @@ import { pickClineToken } from "../src/cline-token.ts";
 import { apinexBalance, clineWindows, codexWindows, minimaxWindows, opencodeWindows, toMs } from "../src/quota-windows.ts";
 import type { ApinexBalance } from "../src/quota-windows.ts";
 import { nativeWindow } from "../src/native-window.ts";
+import { createRefreshQueue, providerIsStale } from "../src/quota-refresh.ts";
 import { detectColorMode, downgradeAnsi, foldLines, paintLiteral } from "../src/ansi.ts";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
@@ -801,7 +802,30 @@ export default function (pi: ExtensionAPI) {
   let tuiRef: { requestRender(): void } | undefined;
   let footerOn = g[FOOTER_ON_KEY] ?? true;
   function setFooterOn(v: boolean) { footerOn = v; g[FOOTER_ON_KEY] = v; }
-  let inFlight = false;
+  // The refresh queue coalesces requests instead of dropping the ones that land
+  // while a fetch is in flight: a session replacement (/clear) fires model_select
+  // during the session_start fetch, and that correction must not be lost.
+  const liveProvider = (): string | undefined => {
+    try { return currentCtx?.model?.provider; } catch { return undefined; }
+  };
+  // Drop a quota fetched for a provider the session has already left, so the ⚡chip
+  // falls back to the live ctx.model.provider instead of showing the old provider.
+  function dropStaleQuota() {
+    if (providerIsStale(quota.provider, liveProvider())) quota = { at: 0, chips: [] };
+  }
+  const refreshQueue = createRefreshQueue<QuotaState>({
+    fetch: (force) => refreshQuotas(currentCtx as ExtensionContext, force),
+    // A state whose provider no longer matches the live model must not be applied
+    // — otherwise a late fetch for the provider we just left would overwrite the
+    // chip back to it. The queued follow-up run refetches for the current one.
+    apply: (state) => {
+      if (providerIsStale(state.provider, liveProvider())) return;
+      quota = state;
+      repaint();
+    },
+    canRun: () => !!currentCtx && footerOn,
+  });
+  const update = (force = false): Promise<void> => refreshQueue.request(force);
   // live phase
   let phase: Phase = "idle";
   let toolName = "";
@@ -881,15 +905,6 @@ export default function (pi: ExtensionAPI) {
     tuiRef = undefined;
   }
 
-  async function update(force = false) {
-    if (!currentCtx || !footerOn || inFlight) return;
-    inFlight = true;
-    try {
-      quota = await refreshQuotas(currentCtx, force);
-      repaint();
-    } finally { inFlight = false; }
-  }
-
   function startTimers() {
     if (!timer) {
       timer = setInterval(() => { void update(false); }, REFRESH_MS);
@@ -911,6 +926,7 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_start", async (_e, ctx) => {
     currentCtx = ctx;
+    dropStaleQuota();
     if (!footerOn) return;
     installFooter(ctx);
     startTimers();
@@ -943,6 +959,11 @@ export default function (pi: ExtensionAPI) {
   pi.on("model_select", async (_e, ctx) => {
     currentCtx = ctx;
     syncThinkLevel(ctx);
+    // A session replacement (/clear) comes up on the settings-default provider and
+    // fires this while the session_start fetch for that default is still in flight.
+    // Drop the quota that belongs to the provider we just left so the ⚡chip reads
+    // the restored live provider; the queue then refetches for it.
+    dropStaleQuota();
     void update(true);
   });
 
