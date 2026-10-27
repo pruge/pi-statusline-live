@@ -5,6 +5,11 @@
  *  - @wierdbytes/pi-statusline (base UI: model / path / git / context / cost / tokens)
  *  - @latentminds/pi-quotas (realtime quota fetch: Anthropic 5h/7d, Codex 5h/7d, OpenCode Go 5h/7d/monthly)
  *
+ * 0.3.2: ClinePass(pi-clinepass-provider) 게이지가 pi auth 의 토큰으로도 뜨게. 지금까지는
+ *   pi-cline-bridge 가 발행한 키를 먼저 믿었는데, bridge 가 이번에 안 돌았으면 그 키는 이미
+ *   회전된 토큰이라 401 이다(실측 2026-10-28: 발행 83분 경과 → 401, pi auth clinepass 44분
+ *   남음 → 200). 후보는 발행 키 → pi auth → CLI 저장 → env 순으로 시도하고 **서버 응답이
+ *   선택한다**(src/cline-token.ts). 토큰을 갱신하지 않는 규칙은 그대로다.
  * 0.3.1: APInex 잔액 칩 — GET https://api.apinex.bond/v1/balance 의 balance_usd(지갑) +
  *   api_key.spent_usd(키별 사용량)를 푸터에 `$X spent · $Y left` 텍스트로 보인다. 돈이라
  *   5h/7d 게이지가 아니라 텍스트 칩이다. 응답 해석은 src/quota-windows.ts 의 apinexBalance
@@ -40,7 +45,7 @@
 import { capChip } from "../src/cap-chip.ts";
 import { contextGauge, type ContextGauge } from "../src/context-gauge.ts";
 import { cacheRatio, cacheReadLabel, cacheReadSuffix, cacheTone, cachePaint, colorForTone, GOOD_OPTIONS } from "../src/cache-segment.ts";
-import { pickClineToken } from "../src/cline-token.ts";
+import { clineTokenCandidates, probeTokens } from "../src/cline-token.ts";
 import { apinexBalance, clineWindows, codexWindows, minimaxWindows, opencodeWindows, toMs } from "../src/quota-windows.ts";
 import type { ApinexBalance } from "../src/quota-windows.ts";
 import { nativeWindow } from "../src/native-window.ts";
@@ -418,13 +423,26 @@ function opencodeGoConfig(): { workspaceId: string; authCookie: string } | null 
   return null;
 }
 
-// Cline 구독 사용량 — https://api.cline.bot. pi-cline-bridge 와 `cline` CLI 는
-// ~/.cline/data/settings/providers.json(providers["cline-pass"|"cline"].settings.auth)
-// 에 저장된 OAuth 토큰을 공유한다. **우리는 그 토큰을 읽기만 한다** — Cline 의 refresh
-// token 은 회전하기 때문에 statusline 이 갱신을 직접 시도하면 토큰을 쓰는 다른 프로세스의
-// 다음 요청이 401 로 실패한다(실측). 만료 임박 토큰은 건너뛰고, 다음 completion 이
-// 갱신시킬 때까지 기다린다(≤60s tick 이 다시 집는다).
+// Cline 구독 사용량 — https://api.cline.bot. **우리는 토큰을 읽기만 한다** — Cline 의
+// refresh token 은 회전하기 때문에 statusline 이 갱신을 직접 시도하면 토큰을 쓰는 다른
+// 프로세스의 다음 요청이 401 로 실패한다(실측). 만료 임박 토큰은 건너뛰고, 다음
+// completion 이 갱신시킬 때까지 기다린다(≤60s tick 이 다시 집는다).
+//
+// 토큰 출처는 두 갈래다: pi-cline-bridge 가 발행한 ~/.cline/data/bridge-token.json 과
+// pi-clinepass-provider 가 쓰는 pi auth(~/.pi/agent/auth.json 의 clinepass — pi 가
+// provider 의 refreshToken 으로 갱신해 파일에 다시 쓴다). 어느 쪽이 살아있는지는
+// **서버가 정한다**: 발행 키도 그 client 가 이번에 안 돌았으면 이미 회전된 토큰이라
+// 401 이다(실측 2026-10-28: 발행 83분 경과 → 401, pi auth 44분 남음 → 200).
+// 그래서 후보를 순서대로 시도해 처음 답한 토큰을 쓴다(src/cline-token.ts).
 const CLINE_API_BASE = process.env.CLINE_API_BASE?.trim() || "https://api.cline.bot";
+function clinePiAuthCredentials(): { access?: string; expires?: number } {
+  const auth = readJson(join(homedir(), ".pi", "agent", "auth.json"));
+  const cred = auth?.clinepass;
+  if (typeof cred === "string" && cred) return { access: cred };
+  const access = cred?.access ?? cred?.key;
+  if (typeof access !== "string" || !access) return {};
+  return { access, expires: Number(cred?.expires) || undefined };
+}
 function clineStoredCredentials(): { access?: string; expires?: number } {
   const pick = (o: any): { access?: string; expires?: number } | undefined => {
     const access = o?.access ?? o?.key ?? o?.apiKey;
@@ -440,12 +458,12 @@ function clineStoredCredentials(): { access?: string; expires?: number } {
   }
   return {};
 }
-async function clineToken(): Promise<string | undefined> {
-  // pi-cline-bridge 가 갱신해 둔 키 — 유일하게 '지금 유효한' 키다. Cline 의 저장된
-  //  토큰은 회전을 통해 이미 무효가 된 경우가 많고, statusline 이 직접 갱신하면
-  //  토큰을 쓰는 다른 프로세스(bridge/CLI)의 다음 요청이 401 로 실패한다.
-  return pickClineToken({
+// 후보 토큰들 — 발행 키(bridge) → pi auth(clinepass) → Cline CLI 저장 토큰 → env.
+// 갱신은 하지 않는다: 읽기만 하는 것이 이 함수의 계약이다.
+function clineTokens(): string[] {
+  return clineTokenCandidates({
     published: readJson(join(homedir(), ".cline", "data", "bridge-token.json")),
+    piAuth: clinePiAuthCredentials(),
     stored: clineStoredCredentials(),
     envApiKey: process.env.CLINE_API_KEY?.trim(),
   });
@@ -453,11 +471,15 @@ async function clineToken(): Promise<string | undefined> {
 // Cline usage — 서버가 사용률을 직접 계산하는 단일 엔드포인트. 클라이언트가
 // plan(한도)+usages(거래) 를 합성하면 비구독 사용량까지 끌어오므로 쓰지 않는다(실측).
 // 응답 해석은 src/quota-windows.ts 의 clineWindows 한 곳에서만.
-async function fetchCline(token?: string): Promise<QuotaChip[]> {
-  if (!token || token.startsWith("!")) return [];
-  const d: any = await fetchJson(`${CLINE_API_BASE}/api/v1/users/me/plan/usage-limits`,
-    { Authorization: `Bearer ${token}`, Accept: "application/json", "User-Agent": "Cline/4.1.10" });
-  return clineWindows(d);
+// 후보를 순서대로 시도해 **서버가 받아준 첫 토큰**을 쓴다 — 발행 키가 있어도 그 client 가
+// 이번에 안 돌았으면 401 이라, 우선순위는 선호일 뿐 선택은 응답이 한다.
+async function fetchCline(tokens: string[]) {
+  const usable = tokens.filter((t) => !t.startsWith("!"));
+  return probeTokens(usable, async (token) => {
+    const d: any = await fetchJson(`${CLINE_API_BASE}/api/v1/users/me/plan/usage-limits`,
+      { Authorization: `Bearer ${token}`, Accept: "application/json", "User-Agent": "Cline/4.1.10" });
+    return clineWindows(d);
+  });
 }
 
 // APInex 잔액 — 같은 키로 모델을 부르고 /v1/balance 가 지갑(balance_usd) + 키별 사용량
@@ -622,11 +644,15 @@ async function refreshQuotas(ctx: ExtensionContext, force = false): Promise<Quot
       state.chips = await fetchMiniMax();
       if (state.chips.length === 0) state.error = "no-mmx";
     } else if (provider === "cline-bridge" || provider === "clinepass" || provider === "cline") {
-      // Cline 구독(pi-cline-bridge, 또는 기본 Cline provider): 서버가 사용률을 직접 계산하는
-      // 단일 엔드포인트. 토큰이 있어도 구독이 없거나 토큰이 만료됐으면 게이지가 안 뜬다(실패가 아니다).
-      const t = await clineToken();
-      state.chips = await fetchCline(t);
-      if (state.chips.length === 0) state.error = t ? "no-plan" : "no-creds";
+      // Cline 구독(pi-cline-bridge, pi-clinepass-provider, 또는 기본 Cline provider): 서버가
+      // 사용률을 직접 계산하는 단일 엔드포인트. 토큰이 있어도 구독이 없으면 게이지가 안 뜬다.
+      // 후보가 401 로 전부 거부된 것(nonce 만료)과 200 인데 창이 없는 것(구독 없음)은 다르다.
+      const tokens = clineTokens();
+      const probe = await fetchCline(tokens);
+      state.chips = probe.value;
+      if (state.chips.length === 0) {
+        state.error = tokens.length === 0 ? "no-creds" : probe.answered ? "no-plan" : "token-rejected";
+      }
     } else {
       // background: still try anthropic so switching back is instant — but don't show
       state.chips = [];
